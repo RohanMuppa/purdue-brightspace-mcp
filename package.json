@@ -1,0 +1,33 @@
+{
+  "name": "purdue-brightspace-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "purdue-brightspace-mcp": "build/index.js",
+    "purdue-brightspace-auth": "build/auth-cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "auth": "node build/auth-cli.js",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "postinstall": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "playwright": "^1.50.0",
+    "zod": "^3.24.0",
+    "otpauth": "^9.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
