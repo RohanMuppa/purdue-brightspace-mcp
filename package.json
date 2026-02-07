@@ -18,14 +18,14 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "playwright": "^1.50.0",
-    "zod": "^3.24.0",
+    "playwright": "^1.58.2",
+    "zod": "^4.0.0",
     "otpauth": "^9.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
