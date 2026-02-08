@@ -6,8 +6,12 @@ import { enableStdoutGuard, log } from "./utils/logger.js";
 import { loadConfig } from "./utils/config.js";
 import { TokenManager } from "./auth/index.js";
 import { D2LApiClient } from "./api/index.js";
-import { registerGetMyCourses } from "./tools/get-my-courses.js";
-import { registerGetUpcomingDueDates } from "./tools/get-upcoming-due-dates.js";
+import {
+  registerGetMyCourses,
+  registerGetUpcomingDueDates,
+  registerGetMyGrades,
+  registerGetAnnouncements,
+} from "./tools/index.js";
 
 // CRITICAL: Enable stdout guard IMMEDIATELY to prevent corruption of stdio transport
 enableStdoutGuard();
@@ -90,13 +94,16 @@ async function main(): Promise<void> {
     // Register MCP tools
     registerGetMyCourses(server, apiClient);
     registerGetUpcomingDueDates(server, apiClient);
-    log("DEBUG", "MCP tools registered (get_my_courses, get_upcoming_due_dates)");
+    registerGetMyGrades(server, apiClient);
+    registerGetAnnouncements(server, apiClient);
+    log("DEBUG", "MCP tools registered (4 core tools)");
 
     // Connect stdio transport
     const transport = new StdioServerTransport();
     await server.connect(transport);
 
-    log("INFO", "Purdue Brightspace MCP Server running on stdio");
+    log("INFO", "Purdue Brightspace MCP Server running on stdio (5 tools registered)");
+    log("INFO", "Claude Desktop setup: see claude-desktop-config.example.json in the project root");
   } catch (error) {
     log("ERROR", "MCP Server failed to start", error);
     process.exit(1);
