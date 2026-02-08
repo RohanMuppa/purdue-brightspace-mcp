@@ -43,6 +43,11 @@ export function sanitizeError(error: unknown): CallToolResult {
 
   // Map to user-friendly messages
   if (error instanceof ApiError) {
+    if (error.status === 404) {
+      return errorResponse(
+        "Resource not found. The course or item may not exist, or you may not have access."
+      );
+    }
     if (error.status === 401) {
       return errorResponse(
         "Authentication expired. Run `purdue-brightspace-auth` to re-authenticate."
