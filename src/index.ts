@@ -5,6 +5,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { enableStdoutGuard, log } from "./utils/logger.js";
 import { loadConfig } from "./utils/config.js";
 import { TokenManager } from "./auth/index.js";
+import { D2LApiClient } from "./api/index.js";
+import {
+  registerGetMyCourses,
+  registerGetUpcomingDueDates,
+  registerGetMyGrades,
+  registerGetAnnouncements,
+} from "./tools/index.js";
 
 // CRITICAL: Enable stdout guard IMMEDIATELY to prevent corruption of stdio transport
 enableStdoutGuard();
@@ -24,6 +31,24 @@ async function main(): Promise<void> {
 
     // Create TokenManager for reading cached tokens
     const tokenManager = new TokenManager(config.sessionDir);
+
+    // Create D2L API Client
+    const apiClient = new D2LApiClient({
+      baseUrl: config.baseUrl,
+      tokenManager,
+    });
+
+    // Initialize API client (discover API versions)
+    try {
+      await apiClient.initialize();
+      log("INFO", "D2L API Client initialized");
+    } catch (error) {
+      log("ERROR", "Failed to initialize D2L API Client", error);
+      log(
+        "WARN",
+        "MCP server will start but tools may not work. Check your connection to Brightspace."
+      );
+    }
 
     // Register check_auth tool (no input schema needed for zero-argument tool)
     server.registerTool(
@@ -66,11 +91,19 @@ async function main(): Promise<void> {
 
     log("DEBUG", "check_auth tool registered");
 
+    // Register MCP tools
+    registerGetMyCourses(server, apiClient);
+    registerGetUpcomingDueDates(server, apiClient);
+    registerGetMyGrades(server, apiClient);
+    registerGetAnnouncements(server, apiClient);
+    log("DEBUG", "MCP tools registered (4 core tools)");
+
     // Connect stdio transport
     const transport = new StdioServerTransport();
     await server.connect(transport);
 
-    log("INFO", "Purdue Brightspace MCP Server running on stdio");
+    log("INFO", "Purdue Brightspace MCP Server running on stdio (5 tools registered)");
+    log("INFO", "Claude Desktop setup: see claude-desktop-config.example.json in the project root");
   } catch (error) {
     log("ERROR", "MCP Server failed to start", error);
     process.exit(1);
