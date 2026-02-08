@@ -15,6 +15,15 @@ export function loadConfig(): AppConfig {
     username: process.env.D2L_USERNAME,
     password: process.env.D2L_PASSWORD,
     totpSecret: process.env.MFA_TOTP_SECRET,
+    courseFilter: {
+      includeCourseIds: process.env.D2L_INCLUDE_COURSES
+        ? process.env.D2L_INCLUDE_COURSES.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
+        : undefined,
+      excludeCourseIds: process.env.D2L_EXCLUDE_COURSES
+        ? process.env.D2L_EXCLUDE_COURSES.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
+        : undefined,
+      activeOnly: process.env.D2L_ACTIVE_ONLY !== 'false', // default true
+    },
   };
 }
 
