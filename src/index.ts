@@ -21,6 +21,11 @@ import {
 // CRITICAL: Enable stdout guard IMMEDIATELY to prevent corruption of stdio transport
 enableStdoutGuard();
 
+// Unhandled rejection handler
+process.on('unhandledRejection', (reason) => {
+  log('ERROR', 'Unhandled promise rejection', reason);
+});
+
 async function main(): Promise<void> {
   try {
     // Load configuration
@@ -98,9 +103,9 @@ async function main(): Promise<void> {
 
     // Log active course filter config if any filter is set
     if (config.courseFilter.includeCourseIds || config.courseFilter.excludeCourseIds || !config.courseFilter.activeOnly) {
-      log("DEBUG", "Course filter enabled", {
-        includeCourseIds: config.courseFilter.includeCourseIds,
-        excludeCourseIds: config.courseFilter.excludeCourseIds,
+      log("DEBUG", "Course filter config", {
+        include: config.courseFilter.includeCourseIds,
+        exclude: config.courseFilter.excludeCourseIds,
         activeOnly: config.courseFilter.activeOnly,
       });
     }
@@ -128,5 +133,15 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 }
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  log('INFO', 'Shutting down MCP server');
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  log('INFO', 'Shutting down MCP server');
+  process.exit(0);
+});
 
 main();
