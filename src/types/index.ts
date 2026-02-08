@@ -30,6 +30,7 @@ export interface AppConfig {
   username?: string;
   password?: string;
   totpSecret?: string;
+  courseFilter: CourseFilterConfig;
 }
 
 // Auth result from browser auth flow
@@ -45,3 +46,10 @@ export interface AuthResult {
 
 // Log levels
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
+
+// Course filtering configuration from environment variables
+export interface CourseFilterConfig {
+  includeCourseIds?: number[];
+  excludeCourseIds?: number[];
+  activeOnly: boolean;
+}
