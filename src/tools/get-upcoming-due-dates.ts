@@ -5,6 +5,8 @@ import {
 } from "./schemas.js";
 import { toolResponse, sanitizeError } from "./tool-helpers.js";
 import { log } from "../utils/logger.js";
+import { applyCourseFilter } from "../utils/course-filter.js";
+import type { AppConfig } from "../types/index.js";
 
 interface EventDataInfo {
   CalendarEventId: string;
@@ -16,19 +18,35 @@ interface EventDataInfo {
   IsAllDayEvent: boolean;
 }
 
+interface EnrollmentItem {
+  OrgUnit: {
+    Id: number;
+    Name: string;
+    Code: string;
+  };
+  Access: {
+    IsActive: boolean;
+  };
+}
+
+interface EnrollmentResponse {
+  Items: EnrollmentItem[];
+}
+
 /**
  * Register get_upcoming_due_dates tool
  */
 export function registerGetUpcomingDueDates(
   server: McpServer,
-  apiClient: D2LApiClient
+  apiClient: D2LApiClient,
+  config: AppConfig
 ): void {
   server.registerTool(
     "get_upcoming_due_dates",
     {
       title: "Get Upcoming Due Dates",
       description:
-        "Fetch upcoming due dates across all your courses. Shows assignments, quizzes, and other items due within the specified time window.",
+        "Fetch upcoming due dates across all your courses. Shows assignments, quizzes, and other items due within the specified time window. Use this when the user asks about deadlines, what's due, upcoming work, or what they need to do this week.",
       inputSchema: GetUpcomingDueDatesSchema,
     },
     async (args: any) => {
@@ -45,19 +63,40 @@ export function registerGetUpcomingDueDates(
         const startDateTime = now.toISOString();
         const endDateTime = endDate.toISOString();
 
-        // Build path
-        let path = apiClient.leGlobal(
-          `/calendar/events/myEvents/?startDateTime=${encodeURIComponent(startDateTime)}&endDateTime=${encodeURIComponent(endDateTime)}`
-        );
-
+        // D2L calendar API requires orgUnitIdsCSV — fetch enrolled course IDs if not provided
+        let orgUnitIds: string;
         if (courseId) {
-          path += `&orgUnitIdsCSV=${courseId}`;
+          orgUnitIds = String(courseId);
+        } else {
+          const enrollments = await apiClient.get<{ Items: EnrollmentItem[] }>(
+            apiClient.lp(`/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true`),
+            { ttl: DEFAULT_CACHE_TTLS.enrollments }
+          );
+
+          // Apply course filter
+          const filteredEnrollments = applyCourseFilter(
+            enrollments.Items.map(item => ({
+              id: item.OrgUnit.Id,
+              name: item.OrgUnit.Name,
+              code: item.OrgUnit.Code,
+              isActive: item.Access.IsActive,
+            })),
+            config.courseFilter
+          );
+
+          orgUnitIds = filteredEnrollments.map((e) => e.id).join(",");
         }
 
-        // Fetch events
-        const events = await apiClient.get<EventDataInfo[]>(path, {
+        // Build path
+        const path = apiClient.leGlobal(
+          `/calendar/events/myEvents/?startDateTime=${encodeURIComponent(startDateTime)}&endDateTime=${encodeURIComponent(endDateTime)}&orgUnitIdsCSV=${orgUnitIds}`
+        );
+
+        // Fetch events (D2L returns ObjectListPage wrapper)
+        const response = await apiClient.get<{ Items: EventDataInfo[] }>(path, {
           ttl: DEFAULT_CACHE_TTLS.assignments,
         });
+        const events = response.Items ?? [];
 
         // Map to clean objects and sort by end date (soonest due first)
         const mappedEvents = events
