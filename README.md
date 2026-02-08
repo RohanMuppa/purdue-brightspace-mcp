@@ -44,7 +44,30 @@ npm install
 
 This will take about 1-2 minutes. It will also automatically install Chromium (used for authentication).
 
-### Step 3: Build the project
+### Step 3: Set up your credentials
+
+Copy the example environment file and fill in your Purdue credentials:
+
+**Mac/Linux:**
+```bash
+cp .env.example .env
+```
+
+**Windows (Command Prompt):**
+```cmd
+copy .env.example .env
+```
+
+Then open `.env` in a text editor and replace the placeholders:
+
+```
+D2L_USERNAME=your_purdue_username
+D2L_PASSWORD=your_purdue_password
+```
+
+Use your Purdue career account username (not your email). Your credentials stay on your machine and are never sent anywhere except Purdue's login page.
+
+### Step 4: Build the project
 
 ```bash
 npm run build
@@ -52,21 +75,20 @@ npm run build
 
 This compiles the TypeScript code. It should complete in a few seconds.
 
-### Step 4: Authenticate with Brightspace
+### Step 5: Authenticate with Brightspace
 
 ```bash
 npm run auth
 ```
 
 **What happens:**
-1. A browser window will open
-2. Log in with your Purdue credentials (username@purdue.edu)
-3. Approve the Duo push notification on your phone
-4. The browser will close automatically once authenticated
+1. A browser window will open and log in automatically using your `.env` credentials
+2. Approve the Duo push notification on your phone
+3. The browser will close automatically once authenticated
 
 **Note:** You only need to do this once. The session lasts about 1 hour. When it expires, just run `npm run auth` again.
 
-### Step 5: Configure your MCP client
+### Step 6: Configure your MCP client
 
 The setup below uses Claude Desktop as an example, but this server works with any MCP client.
 
@@ -119,7 +141,7 @@ To find the path:
 
 Save the file and **restart your MCP client completely** (quit and reopen).
 
-### Step 6: Verify it works
+### Step 7: Verify it works
 
 1. Open your MCP client
 2. Start a new conversation
