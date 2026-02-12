@@ -1,0 +1,20 @@
+{
+  "_comment": "ChatGPT Desktop configures MCP servers through its Settings UI (Settings > Features > MCP Servers), not a JSON file",
+  "_instructions": [
+    "Open ChatGPT Desktop",
+    "Go to Settings > scroll to find 'MCP Servers' or look under Features/Tools section",
+    "Click 'Add Server' or similar button",
+    "Enter server name: purdue-brightspace",
+    "Enter command: node",
+    "Enter argument: /ABSOLUTE/PATH/TO/purdue-brightspace-mcp/build/index.js (replace with actual path)",
+    "Run 'purdue-brightspace-auth' first to authenticate before using with ChatGPT Desktop",
+    "Note: MCP support may be in beta or rolling out gradually"
+  ],
+  "mcpServers": {
+    "purdue-brightspace": {
+      "command": "node",
+      "args": ["/ABSOLUTE/PATH/TO/purdue-brightspace-mcp/build/index.js"],
+      "env": {}
+    }
+  }
+}
