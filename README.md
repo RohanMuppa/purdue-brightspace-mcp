@@ -1,5 +1,7 @@
 # Purdue Brightspace MCP Server
 
+> **Created by [Rohan Muppa](https://github.com/rohanmuppa)**
+
 Access your Purdue Brightspace courses using natural language. Get grades, due dates, announcements, rosters, and more. Works with any MCP client (Claude Desktop, ChatGPT Desktop, Claude Code, Cursor, etc.).
 
 ## What You Can Do
@@ -342,4 +344,10 @@ Found a bug or have a feature request? Open an issue on GitHub!
 
 ## License
 
-AGPL-3.0
+AGPL-3.0-only — Copyright (c) 2025 Rohan Muppa
+
+## Author
+
+**Rohan Muppa**
+GitHub: [@rohanmuppa](https://github.com/rohanmuppa)
+Project: [purdue-brightspace-mcp](https://github.com/rohanmuppa/purdue-brightspace-mcp)
