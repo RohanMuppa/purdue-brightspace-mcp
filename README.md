@@ -102,15 +102,17 @@ npm run auth
 
 **Note:** You only need to do this once. The session lasts about 1 hour. When it expires, just run `npm run auth` again.
 
-### Step 6: Configure Claude Desktop
+### Step 6: Configure your MCP client
 
-The setup below uses Claude Desktop as an example, but this server works with any MCP client.
+Choose the setup instructions for your MCP client:
 
-**Claude Desktop config file location:**
+#### Claude Desktop
+
+**Config file location:**
 - **Mac**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Open it in a text editor and add this configuration (if the file doesn't exist, create it):
+Open the config file in a text editor and add this configuration (if the file doesn't exist, create it):
 
 ```json
 {
@@ -153,7 +155,86 @@ To find the path:
 }
 ```
 
-Save the file and **restart your MCP client completely** (quit and reopen).
+See `claude-desktop-config.example.json` for the full example.
+
+#### Cursor
+
+**Config file location (choose one):**
+- **Project-level**: `.cursor/mcp.json` in the project root
+- **Global** (recommended for this server): `~/.cursor/mcp.json`
+
+Create or open the config file and add this configuration:
+
+```json
+{
+  "mcpServers": {
+    "purdue-brightspace": {
+      "command": "node",
+      "args": ["/absolute/path/to/purdue-brightspace-mcp/build/index.js"]
+    }
+  }
+}
+```
+
+**Important:** Replace `/absolute/path/to/purdue-brightspace-mcp` with the actual path on your computer (use `pwd` on Mac/Linux or `cd` on Windows to find it).
+
+**Example (Mac):**
+```json
+{
+  "mcpServers": {
+    "purdue-brightspace": {
+      "command": "node",
+      "args": ["/Users/username/purdue-brightspace-mcp/build/index.js"]
+    }
+  }
+}
+```
+
+**Example (Windows):**
+```json
+{
+  "mcpServers": {
+    "purdue-brightspace": {
+      "command": "node",
+      "args": ["C:\\Users\\username\\purdue-brightspace-mcp\\build\\index.js"]
+    }
+  }
+}
+```
+
+Save the file and **restart Cursor** to load the MCP server.
+
+See `cursor-config.example.json` for the full example.
+
+#### ChatGPT Desktop
+
+ChatGPT Desktop configures MCP servers through its Settings UI, not a JSON file.
+
+**Setup steps:**
+1. Open ChatGPT Desktop
+2. Go to **Settings**
+3. Scroll down to find **"MCP Servers"** (may be under a Features or Tools section)
+4. Click **"Add Server"** (or similar button)
+5. Enter the following:
+   - **Server name**: `purdue-brightspace`
+   - **Command**: `node`
+   - **Argument**: `/absolute/path/to/purdue-brightspace-mcp/build/index.js` (replace with your actual path)
+
+To find your path:
+- **Mac/Linux**: In Terminal, go to the project directory and run `pwd`
+- **Windows**: In Command Prompt, go to the project directory and run `cd`
+
+**Example paths:**
+- Mac: `/Users/username/purdue-brightspace-mcp/build/index.js`
+- Windows: `C:\Users\username\purdue-brightspace-mcp\build\index.js`
+
+**Note:** ChatGPT Desktop's MCP support may be in beta or rolling out gradually. If you don't see the MCP Servers option yet, check for app updates.
+
+See `chatgpt-desktop-config.example.json` for a reference config structure.
+
+---
+
+After configuring your MCP client, **restart it completely** (quit and reopen, not just close the window).
 
 ### Step 7: Verify it works
 
