@@ -1,6 +1,7 @@
 {
   "name": "purdue-brightspace-mcp",
   "version": "1.0.0",
+  "description": "MCP server for Purdue Brightspace - by Rohan Muppa",
   "type": "module",
   "main": "build/index.js",
   "bin": {
@@ -40,5 +41,21 @@
     "node": ">=18.0.0"
   },
   "license": "AGPL-3.0-only",
-  "author": "Rohan Muppa"
+  "author": "Rohan Muppa",
+  "homepage": "https://github.com/rohanmuppa/purdue-brightspace-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rohanmuppa/purdue-brightspace-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rohanmuppa/purdue-brightspace-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "purdue",
+    "brightspace",
+    "d2l",
+    "education",
+    "rohan-muppa"
+  ]
 }
