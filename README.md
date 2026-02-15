@@ -6,88 +6,158 @@ Access your Purdue Brightspace courses using natural language. Get grades, due d
 
 ## Architecture
 
+### System Overview
+
 ```mermaid
 flowchart TB
-    subgraph Client["MCP Client"]
+    subgraph Client["🖥️ MCP Client"]
         Claude["Claude Desktop / ChatGPT / Cursor / Claude Code"]
     end
 
-    subgraph MCP["MCP Server (stdio)"]
+    subgraph MCP["🟢 MCP Server"]
         direction TB
-        Server["Tool Router"]
-        Guard["Stdout Guard"]
+        Server["Tool Router\n+ Stdout Guard"]
 
-        subgraph Tools["MCP Tools"]
+        subgraph Tools["11 MCP Tools"]
             direction LR
             T1["check_auth"]
             T2["get_my_courses"]
-            T3["get_upcoming_due_dates"]
-            T4["get_my_grades"]
+            T3["get_my_grades"]
+            T4["get_upcoming_due_dates"]
             T5["get_announcements"]
             T6["get_assignments"]
             T7["get_course_content"]
             T8["download_file"]
-            T9["get_classlist_emails"]
-            T10["get_roster"]
+            T9["get_roster"]
+            T10["get_classlist_emails"]
             T11["get_syllabus"]
         end
 
-        subgraph Validation["Input Validation"]
+        subgraph Validate["Input Validation"]
             Zod["Zod Schemas"]
+        end
+
+        subgraph Utils["Shared Utilities"]
+            direction LR
+            Logger["Logger\n(stderr only)"]
+            Filter["Course Filter"]
+            HTML["HTML → Text"]
+            DL["Download Helpers"]
         end
     end
 
-    subgraph API["D2L API Client"]
-        direction TB
-        Cache["TTL Cache\n(in-memory, per-data-type)"]
-        RateLimit["Token Bucket\n(10 burst / 3 per sec)"]
-        TokenMgr["Token Manager\n(memory → disk fallback)"]
-        AuthHeaders["Auth Header Builder\n(Bearer or Cookie)"]
+    subgraph API["🟠 D2L API Client"]
+        direction LR
+        Cache["TTL Cache\n(in-memory)"]
+        RateLimit["Token Bucket\n(10 burst / 3/s)"]
+        TokenMgr["Token Manager\n(memory → disk)"]
+        AuthHeaders["Auth Headers\n(Bearer | Cookie)"]
     end
 
-    subgraph Auth["Authentication"]
+    subgraph Auth["🔴 Authentication"]
         direction TB
         AuthCLI["Auth CLI\n(purdue-brightspace-auth)"]
-        Playwright["Playwright Browser"]
-        SSO["Purdue SSO\n(Microsoft Entra ID)"]
-        MFA["Duo MFA"]
+        Playwright["Playwright\n(Headless Chromium)"]
+        SSO["Purdue SSO\n(Entra ID + Duo MFA)"]
         TokenExtract["Token Extraction\n(Bearer → XSRF → Cookie)"]
-        SessionStore["Encrypted Session Store\n(AES-256-GCM)\n~/.d2l-session/"]
+        SessionStore[("Encrypted Store\nAES-256-GCM\n~/.d2l-session/")]
     end
 
-    subgraph D2L["Purdue Brightspace"]
+    subgraph D2L["🟣 Purdue Brightspace"]
         direction LR
-        LP["LP API v1.56\n(enrollments, calendar)"]
-        LE["LE API v1.91\n(grades, content, roster)"]
-        Versions["Version Discovery\n(/d2l/api/versions/)"]
+        LP["LP API v1.56\nEnrollments · Calendar"]
+        LE["LE API v1.91\nGrades · Content · Roster"]
+        Versions["Version Discovery\n/d2l/api/versions/"]
     end
 
-    Client <-->|"stdio\n(JSON-RPC)"| Server
-    Server --> Guard
+    Client <-->|"stdio (JSON-RPC)"| Server
     Server --> Tools
     Tools --> Zod
     Zod --> Cache
-    Cache -->|"miss"| RateLimit
+    Cache -->|"cache miss"| RateLimit
     RateLimit --> TokenMgr
-    TokenMgr -->|"read token"| SessionStore
     TokenMgr --> AuthHeaders
     AuthHeaders -->|"HTTPS"| LP
     AuthHeaders -->|"HTTPS"| LE
     Server -->|"startup"| Versions
 
-    AuthCLI --> Playwright
-    Playwright --> SSO
-    SSO --> MFA
-    MFA --> TokenExtract
+    AuthCLI --> Playwright --> SSO --> TokenExtract
     TokenExtract -->|"encrypt & store"| SessionStore
+    TokenMgr -->|"read token"| SessionStore
+    TokenMgr -.->|"401 → re-auth"| AuthCLI
 
-    TokenMgr -.->|"401 → auto-reauth\n(child process)"| AuthCLI
+    style Client fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    style MCP fill:#d5e8d4,stroke:#82b366,stroke-width:2px
+    style Tools fill:#d5e8d4,stroke:#82b366
+    style Validate fill:#d5e8d4,stroke:#82b366
+    style Utils fill:#d5e8d4,stroke:#82b366
+    style API fill:#fff2cc,stroke:#d6b656,stroke-width:2px
+    style Auth fill:#f8cecc,stroke:#b85450,stroke-width:2px
+    style D2L fill:#e1d5e7,stroke:#9673a6,stroke-width:2px
+```
 
-    style Client fill:#f0f4ff,stroke:#4a6fa5
-    style MCP fill:#f0fff0,stroke:#4a9e4a
-    style API fill:#fff8f0,stroke:#c4873a
-    style Auth fill:#fff0f0,stroke:#b85c5c
-    style D2L fill:#f5f0ff,stroke:#7a5cb8
+### Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CLI as Auth CLI
+    participant PW as Playwright
+    participant SSO as Purdue SSO<br/>(Entra ID)
+    participant Duo as Duo MFA
+    participant D2L as Brightspace
+    participant Store as Encrypted Store<br/>(~/.d2l-session/)
+
+    User->>CLI: purdue-brightspace-auth
+    CLI->>PW: Launch headless Chromium
+    PW->>D2L: Navigate to Brightspace
+    D2L-->>PW: Redirect to SSO
+    PW->>SSO: Submit credentials (.env)
+    SSO-->>PW: MFA challenge
+    PW->>Duo: Push notification
+    User->>Duo: Approve on phone
+    Duo-->>PW: MFA approved
+    PW->>D2L: Complete login
+    D2L-->>PW: Set session cookies
+
+    Note over PW: Extract tokens:<br/>Bearer → XSRF → Cookie
+
+    PW->>Store: Encrypt (AES-256-GCM) & save
+    PW-->>CLI: Auth complete
+    CLI-->>User: ✓ Authenticated
+
+    Note over Store: Permissions: 0700/0600<br/>Tokens expire ~1 hour
+```
+
+### Request Lifecycle
+
+```mermaid
+flowchart LR
+    subgraph Request["User asks a question"]
+        Q["What are my grades?"]
+    end
+
+    subgraph Pipeline["MCP Server Pipeline"]
+        direction LR
+        Route["Route to\nget_my_grades"]
+        Valid["Validate input\n(Zod)"]
+        CacheCheck{"Cache\nhit?"}
+        Rate["Rate limit\n(token bucket)"]
+        Auth["Attach auth\nheaders"]
+    end
+
+    subgraph Response["Response"]
+        Format["Format &\nreturn grades"]
+    end
+
+    Q --> Route --> Valid --> CacheCheck
+    CacheCheck -->|"hit"| Format
+    CacheCheck -->|"miss"| Rate --> Auth -->|"HTTPS"| D2L["D2L API"]
+    D2L --> Format
+
+    style Request fill:#dae8fc,stroke:#6c8ebf
+    style Pipeline fill:#d5e8d4,stroke:#82b366
+    style Response fill:#fff2cc,stroke:#d6b656
 ```
 
 ## What You Can Do
