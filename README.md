@@ -4,17 +4,11 @@
 
 Access your Purdue Brightspace courses using natural language. Get grades, due dates, announcements, rosters, and more. Works with any MCP client (Claude Desktop, ChatGPT Desktop, Claude Code, Cursor, etc.).
 
-## How It Works
+## Architecture
 
-```mermaid
-graph LR
-    A[AI Assistant] -- stdio --> B[MCP Server] -- HTTPS --> C[Purdue Brightspace]
-    D[Auth CLI] -. encrypted tokens .-> B
-```
-
-**You ask a question in plain English** &rarr; your AI client sends it to the MCP server &rarr; the server calls the Brightspace API &rarr; you get your answer.
-
-Authentication is handled separately through a one-time CLI login that opens a browser, signs in through Purdue SSO + Duo, and saves an encrypted session token locally.
+<p align="center">
+  <img src="docs/architecture.svg" alt="Architecture diagram" width="780">
+</p>
 
 ## What You Can Do
 
