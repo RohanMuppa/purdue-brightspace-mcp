@@ -4,6 +4,92 @@
 
 Access your Purdue Brightspace courses using natural language. Get grades, due dates, announcements, rosters, and more. Works with any MCP client (Claude Desktop, ChatGPT Desktop, Claude Code, Cursor, etc.).
 
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client["MCP Client"]
+        Claude["Claude Desktop / ChatGPT / Cursor / Claude Code"]
+    end
+
+    subgraph MCP["MCP Server (stdio)"]
+        direction TB
+        Server["Tool Router"]
+        Guard["Stdout Guard"]
+
+        subgraph Tools["MCP Tools"]
+            direction LR
+            T1["check_auth"]
+            T2["get_my_courses"]
+            T3["get_upcoming_due_dates"]
+            T4["get_my_grades"]
+            T5["get_announcements"]
+            T6["get_assignments"]
+            T7["get_course_content"]
+            T8["download_file"]
+            T9["get_classlist_emails"]
+            T10["get_roster"]
+            T11["get_syllabus"]
+        end
+
+        subgraph Validation["Input Validation"]
+            Zod["Zod Schemas"]
+        end
+    end
+
+    subgraph API["D2L API Client"]
+        direction TB
+        Cache["TTL Cache\n(in-memory, per-data-type)"]
+        RateLimit["Token Bucket\n(10 burst / 3 per sec)"]
+        TokenMgr["Token Manager\n(memory → disk fallback)"]
+        AuthHeaders["Auth Header Builder\n(Bearer or Cookie)"]
+    end
+
+    subgraph Auth["Authentication"]
+        direction TB
+        AuthCLI["Auth CLI\n(purdue-brightspace-auth)"]
+        Playwright["Playwright Browser"]
+        SSO["Purdue SSO\n(Microsoft Entra ID)"]
+        MFA["Duo MFA"]
+        TokenExtract["Token Extraction\n(Bearer → XSRF → Cookie)"]
+        SessionStore["Encrypted Session Store\n(AES-256-GCM)\n~/.d2l-session/"]
+    end
+
+    subgraph D2L["Purdue Brightspace"]
+        direction LR
+        LP["LP API v1.56\n(enrollments, calendar)"]
+        LE["LE API v1.91\n(grades, content, roster)"]
+        Versions["Version Discovery\n(/d2l/api/versions/)"]
+    end
+
+    Client <-->|"stdio\n(JSON-RPC)"| Server
+    Server --> Guard
+    Server --> Tools
+    Tools --> Zod
+    Zod --> Cache
+    Cache -->|"miss"| RateLimit
+    RateLimit --> TokenMgr
+    TokenMgr -->|"read token"| SessionStore
+    TokenMgr --> AuthHeaders
+    AuthHeaders -->|"HTTPS"| LP
+    AuthHeaders -->|"HTTPS"| LE
+    Server -->|"startup"| Versions
+
+    AuthCLI --> Playwright
+    Playwright --> SSO
+    SSO --> MFA
+    MFA --> TokenExtract
+    TokenExtract -->|"encrypt & store"| SessionStore
+
+    TokenMgr -.->|"401 → auto-reauth\n(child process)"| AuthCLI
+
+    style Client fill:#f0f4ff,stroke:#4a6fa5
+    style MCP fill:#f0fff0,stroke:#4a9e4a
+    style API fill:#fff8f0,stroke:#c4873a
+    style Auth fill:#fff0f0,stroke:#b85c5c
+    style D2L fill:#f5f0ff,stroke:#7a5cb8
+```
+
 ## What You Can Do
 
 - "What assignments are due this week?"
