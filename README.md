@@ -4,161 +4,17 @@
 
 Access your Purdue Brightspace courses using natural language. Get grades, due dates, announcements, rosters, and more. Works with any MCP client (Claude Desktop, ChatGPT Desktop, Claude Code, Cursor, etc.).
 
-## Architecture
-
-### System Overview
+## How It Works
 
 ```mermaid
-flowchart TB
-    subgraph Client["🖥️ MCP Client"]
-        Claude["Claude Desktop / ChatGPT / Cursor / Claude Code"]
-    end
-
-    subgraph MCP["🟢 MCP Server"]
-        direction TB
-        Server["Tool Router\n+ Stdout Guard"]
-
-        subgraph Tools["11 MCP Tools"]
-            direction LR
-            T1["check_auth"]
-            T2["get_my_courses"]
-            T3["get_my_grades"]
-            T4["get_upcoming_due_dates"]
-            T5["get_announcements"]
-            T6["get_assignments"]
-            T7["get_course_content"]
-            T8["download_file"]
-            T9["get_roster"]
-            T10["get_classlist_emails"]
-            T11["get_syllabus"]
-        end
-
-        subgraph Validate["Input Validation"]
-            Zod["Zod Schemas"]
-        end
-
-        subgraph Utils["Shared Utilities"]
-            direction LR
-            Logger["Logger\n(stderr only)"]
-            Filter["Course Filter"]
-            HTML["HTML → Text"]
-            DL["Download Helpers"]
-        end
-    end
-
-    subgraph API["🟠 D2L API Client"]
-        direction LR
-        Cache["TTL Cache\n(in-memory)"]
-        RateLimit["Token Bucket\n(10 burst / 3/s)"]
-        TokenMgr["Token Manager\n(memory → disk)"]
-        AuthHeaders["Auth Headers\n(Bearer | Cookie)"]
-    end
-
-    subgraph Auth["🔴 Authentication"]
-        direction TB
-        AuthCLI["Auth CLI\n(purdue-brightspace-auth)"]
-        Playwright["Playwright\n(Headless Chromium)"]
-        SSO["Purdue SSO\n(Entra ID + Duo MFA)"]
-        TokenExtract["Token Extraction\n(Bearer → XSRF → Cookie)"]
-        SessionStore[("Encrypted Store\nAES-256-GCM\n~/.d2l-session/")]
-    end
-
-    subgraph D2L["🟣 Purdue Brightspace"]
-        direction LR
-        LP["LP API v1.56\nEnrollments · Calendar"]
-        LE["LE API v1.91\nGrades · Content · Roster"]
-        Versions["Version Discovery\n/d2l/api/versions/"]
-    end
-
-    Client <-->|"stdio (JSON-RPC)"| Server
-    Server --> Tools
-    Tools --> Zod
-    Zod --> Cache
-    Cache -->|"cache miss"| RateLimit
-    RateLimit --> TokenMgr
-    TokenMgr --> AuthHeaders
-    AuthHeaders -->|"HTTPS"| LP
-    AuthHeaders -->|"HTTPS"| LE
-    Server -->|"startup"| Versions
-
-    AuthCLI --> Playwright --> SSO --> TokenExtract
-    TokenExtract -->|"encrypt & store"| SessionStore
-    TokenMgr -->|"read token"| SessionStore
-    TokenMgr -.->|"401 → re-auth"| AuthCLI
-
-    style Client fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
-    style MCP fill:#d5e8d4,stroke:#82b366,stroke-width:2px
-    style Tools fill:#d5e8d4,stroke:#82b366
-    style Validate fill:#d5e8d4,stroke:#82b366
-    style Utils fill:#d5e8d4,stroke:#82b366
-    style API fill:#fff2cc,stroke:#d6b656,stroke-width:2px
-    style Auth fill:#f8cecc,stroke:#b85450,stroke-width:2px
-    style D2L fill:#e1d5e7,stroke:#9673a6,stroke-width:2px
+graph LR
+    A[AI Assistant] -- stdio --> B[MCP Server] -- HTTPS --> C[Purdue Brightspace]
+    D[Auth CLI] -. encrypted tokens .-> B
 ```
 
-### Authentication Flow
+**You ask a question in plain English** &rarr; your AI client sends it to the MCP server &rarr; the server calls the Brightspace API &rarr; you get your answer.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant CLI as Auth CLI
-    participant PW as Playwright
-    participant SSO as Purdue SSO<br/>(Entra ID)
-    participant Duo as Duo MFA
-    participant D2L as Brightspace
-    participant Store as Encrypted Store<br/>(~/.d2l-session/)
-
-    User->>CLI: purdue-brightspace-auth
-    CLI->>PW: Launch headless Chromium
-    PW->>D2L: Navigate to Brightspace
-    D2L-->>PW: Redirect to SSO
-    PW->>SSO: Submit credentials (.env)
-    SSO-->>PW: MFA challenge
-    PW->>Duo: Push notification
-    User->>Duo: Approve on phone
-    Duo-->>PW: MFA approved
-    PW->>D2L: Complete login
-    D2L-->>PW: Set session cookies
-
-    Note over PW: Extract tokens:<br/>Bearer → XSRF → Cookie
-
-    PW->>Store: Encrypt (AES-256-GCM) & save
-    PW-->>CLI: Auth complete
-    CLI-->>User: ✓ Authenticated
-
-    Note over Store: Permissions: 0700/0600<br/>Tokens expire ~1 hour
-```
-
-### Request Lifecycle
-
-```mermaid
-flowchart LR
-    subgraph Request["User asks a question"]
-        Q["What are my grades?"]
-    end
-
-    subgraph Pipeline["MCP Server Pipeline"]
-        direction LR
-        Route["Route to\nget_my_grades"]
-        Valid["Validate input\n(Zod)"]
-        CacheCheck{"Cache\nhit?"}
-        Rate["Rate limit\n(token bucket)"]
-        Auth["Attach auth\nheaders"]
-    end
-
-    subgraph Response["Response"]
-        Format["Format &\nreturn grades"]
-    end
-
-    Q --> Route --> Valid --> CacheCheck
-    CacheCheck -->|"hit"| Format
-    CacheCheck -->|"miss"| Rate --> Auth -->|"HTTPS"| D2L["D2L API"]
-    D2L --> Format
-
-    style Request fill:#dae8fc,stroke:#6c8ebf
-    style Pipeline fill:#d5e8d4,stroke:#82b366
-    style Response fill:#fff2cc,stroke:#d6b656
-```
+Authentication is handled separately through a one-time CLI login that opens a browser, signs in through Purdue SSO + Duo, and saves an encrypted session token locally.
 
 ## What You Can Do
 
