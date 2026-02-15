@@ -40,8 +40,8 @@
   <rect x="120" y="155" width="720" height="180" rx="14" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
   <rect x="120" y="155" width="720" height="50" rx="14" fill="url(#pluginGrad)"/>
   <rect x="120" y="190" width="720" height="15" fill="url(#pluginGrad)"/>
-  <text x="480" y="182" text-anchor="middle" fill="#fff" font-size="18" font-weight="700" letter-spacing="0.3">Brightspace Plugin</text>
-  <text x="480" y="200" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="11">understands 11 types of questions about your courses</text>
+  <text x="480" y="182" text-anchor="middle" fill="#fff" font-size="18" font-weight="700" letter-spacing="0.3">Brightspace MCP</text>
+  <text x="480" y="200" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="11">understands questions about your courses</text>
 
   <!-- Skill pills row 1 -->
   <rect x="140" y="222" width="100" height="30" rx="15" fill="#f0fff4" stroke="#c6f6d5" stroke-width="1"/>
@@ -110,6 +110,14 @@
   <text x="480" y="578" text-anchor="middle" fill="#fff" font-size="20" font-weight="700" letter-spacing="0.3">Purdue Brightspace</text>
   <text x="480" y="598" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-size="12">Your courses, grades, assignments, and more</text>
 
+  <!-- RETURN ARROW: Brightspace back to AI Chatbot (right side) -->
+  <line x1="710" y1="578" x2="870" y2="578" stroke="#cbd5e0" stroke-width="2"/>
+  <line x1="870" y1="578" x2="870" y2="60" stroke="#cbd5e0" stroke-width="2"/>
+  <line x1="870" y1="60" x2="696" y2="60" stroke="#cbd5e0" stroke-width="2"/>
+  <polygon points="700,54 690,60 700,66" fill="#cbd5e0"/>
+  <rect x="838" y="308" width="64" height="20" rx="10" fill="#edf2f7"/>
+  <text x="870" y="322" text-anchor="middle" fill="#718096" font-size="10" font-weight="600">your answer</text>
+
   <!-- LOGIN SIDEBAR -->
   <rect x="14" y="200" width="88" height="380" rx="14" fill="#fff" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
   <rect x="14" y="200" width="88" height="36" rx="14" fill="url(#loginGrad)"/>
@@ -151,7 +159,7 @@
     <rect x="868" y="562" width="10" height="10" rx="5" fill="url(#chatbotGrad)"/>
     <text x="884" y="572" fill="#4a5568" font-size="9">Chatbot</text>
     <rect x="868" y="580" width="10" height="10" rx="5" fill="url(#pluginGrad)"/>
-    <text x="884" y="590" fill="#4a5568" font-size="9">Plugin</text>
+    <text x="884" y="590" fill="#4a5568" font-size="9">MCP</text>
     <rect x="868" y="598" width="10" height="10" rx="5" fill="url(#connectorGrad)"/>
     <text x="884" y="608" fill="#4a5568" font-size="9">Connector</text>
     <rect x="868" y="616" width="10" height="10" rx="5" fill="url(#loginGrad)"/>
