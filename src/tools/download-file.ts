@@ -31,7 +31,7 @@ export function registerDownloadFile(
     {
       title: "Download File",
       description:
-        "Download a file from course content or assignment submissions to a local directory. Use this when the user wants to download, save, or get a file from Brightspace course content or dropbox submissions. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool. Never guess or assume a download directory.",
+        "Download a file from course content or assignment submissions to a local directory. Use this when the user wants to download, save, or get a file from Brightspace course content or dropbox submissions. IMPORTANT: You MUST ask the user where they want to save the file before calling this tool. Never guess or assume a download directory. After identifying the file to download, suggest a clean readable filename to the user (e.g., 'Lecture 7 - Memory Management.pdf' instead of 'L07_CS251_2026SP_v2.pdf') and ask if they'd like to rename it. Pass their preferred name as customFilename, or omit it to keep the original.",
       inputSchema: DownloadFileSchema,
     },
     async (args: any) => {
@@ -39,7 +39,7 @@ export function registerDownloadFile(
         log("DEBUG", "download_file tool called", { args });
 
         // Parse and validate input
-        const { courseId, topicId, folderId, fileId, downloadPath } =
+        const { courseId, topicId, folderId, fileId, downloadPath, customFilename } =
           DownloadFileSchema.parse(args);
 
         // Validate courseId
@@ -77,7 +77,8 @@ export function registerDownloadFile(
             apiClient,
             courseId,
             topicId,
-            downloadPath
+            downloadPath,
+            customFilename
           );
         } else if (folderId !== undefined && fileId !== undefined) {
           // Submission file download
@@ -88,7 +89,8 @@ export function registerDownloadFile(
             courseId,
             folderId,
             fileId,
-            downloadPath
+            downloadPath,
+            customFilename
           );
         } else {
           return errorResponse(
@@ -109,7 +111,8 @@ async function downloadContentFile(
   apiClient: D2LApiClient,
   courseId: number,
   topicId: number,
-  downloadPath: string
+  downloadPath: string,
+  customFilename?: string
 ): Promise<any> {
   log(
     "INFO",
@@ -153,10 +156,14 @@ async function downloadContentFile(
     );
   }
 
+  // Use custom filename if provided, otherwise use Content-Disposition filename
+  const originalFilename = filename;
+  const effectiveFilename = customFilename || filename;
+
   // Use secureDownload for path traversal prevention, file type validation, and conflict resolution
   const result = await secureDownload({
     targetDir: downloadPath,
-    filename,
+    filename: effectiveFilename,
     data: buffer,
   });
 
@@ -170,6 +177,7 @@ async function downloadContentFile(
     filePath: result.path,
     fileSize: result.size,
     mimeType: result.mime,
+    originalFilename,
     message: `File downloaded successfully to ${result.path}`,
   });
 }
@@ -182,7 +190,8 @@ async function downloadSubmissionFile(
   courseId: number,
   folderId: number,
   fileId: number,
-  downloadPath: string
+  downloadPath: string,
+  customFilename?: string
 ): Promise<any> {
   log(
     "INFO",
@@ -254,10 +263,14 @@ async function downloadSubmissionFile(
     );
   }
 
+  // Use custom filename if provided, otherwise use original submission filename
+  const originalFilename = file.FileName;
+  const effectiveFilename = customFilename || file.FileName;
+
   // Use secureDownload for path traversal prevention, file type validation, and conflict resolution
   const result = await secureDownload({
     targetDir: downloadPath,
-    filename: file.FileName,
+    filename: effectiveFilename,
     data: buffer,
   });
 
@@ -271,6 +284,7 @@ async function downloadSubmissionFile(
     filePath: result.path,
     fileSize: result.size,
     mimeType: result.mime,
+    originalFilename,
     message: `File downloaded successfully to ${result.path}`,
   });
 }
