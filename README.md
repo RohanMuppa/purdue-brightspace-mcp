@@ -22,53 +22,66 @@ Originally built for Purdue University's Brightspace, but works with any institu
 - "What's my grade in all my classes?"
 - "Get me the roster emails for my CS course"
 
-## Prerequisites
+## Quick Start
 
-1. **Node.js** (version 18 or higher)
-   - Download from https://nodejs.org/ (choose the LTS version)
-   - To check if you already have it: Open Terminal (Mac) or Command Prompt (Windows) and type `node --version`
+### Prerequisites
 
-2. **An MCP client** (any of these work)
-   - [Claude Desktop](https://claude.ai/download)
-   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-   - [ChatGPT Desktop](https://openai.com/chatgpt/desktop/)
-   - [Cursor](https://cursor.com)
-   - Or any other app that supports MCP
+**Node.js** (version 18 or higher) — [download here](https://nodejs.org/) (choose LTS).
 
-## Setup
+To check if you have it:
+```bash
+node --version
+```
 
-### Step 1: Clone this repository
-
-Open Terminal (Mac) or Command Prompt (Windows) and run:
+### Install & Setup (One Command)
 
 ```bash
-git clone https://github.com/RohanMuppa/brightspace-mcp-server.git
-cd brightspace-mcp-server
+npx brightspace-mcp-server setup
 ```
 
-### Step 2: Install dependencies
+The setup wizard will walk you through everything:
+
+1. Enter your Brightspace URL (e.g., `purdue.brightspace.com`)
+2. Enter your username and password
+3. Configure MFA (Duo push or TOTP)
+4. Automatically configure Claude Desktop / Cursor
+
+That's it. Open your MCP client and ask "What are my courses?"
+
+### Purdue Students
 
 ```bash
-npm install
+npx brightspace-mcp-server setup
 ```
 
-This will take about 1-2 minutes. It will also automatically install Chromium (used for authentication).
+When prompted, use `purdue.brightspace.com` as your URL and your Purdue career account credentials. Approve the Duo push when authenticating.
 
-### Step 3: Set up your credentials
+## Manual Setup
 
-Copy the example environment file and fill in your Brightspace credentials:
+If you prefer to configure things yourself instead of using the setup wizard:
 
-**Mac/Linux:**
+<details>
+<summary>Click to expand manual setup instructions</summary>
+
+### Step 1: Install globally
+
 ```bash
-cp .env.example .env
+npm install -g brightspace-mcp-server
 ```
 
-**Windows (Command Prompt):**
-```cmd
-copy .env.example .env
+### Step 2: Create config file
+
+Create `~/.brightspace-mcp/config.json`:
+
+```json
+{
+  "baseUrl": "https://your-institution.brightspace.com",
+  "username": "your_username",
+  "password": "your_password"
+}
 ```
 
-Then open `.env` in a text editor and fill in:
+Or use a `.env` file in your working directory:
 
 ```
 D2L_BASE_URL=https://your-institution.brightspace.com
@@ -76,184 +89,58 @@ D2L_USERNAME=your_username
 D2L_PASSWORD=your_password
 ```
 
-Set `D2L_BASE_URL` to your institution's Brightspace URL. **Purdue students**: use `https://purdue.brightspace.com` and your Purdue career account username. Your credentials stay on your machine and are never sent anywhere except your institution's login page.
-
-### Step 4: Build the project
-
-```bash
-npm run build
-```
-
-This compiles the TypeScript code. It should complete in a few seconds.
-
-### Step 4: Link the CLI tools
-
-```bash
-npm link
-```
-
-This registers the `brightspace-auth` command globally so you can run it from anywhere.
-
-### Step 5: Authenticate with Brightspace
+### Step 3: Authenticate
 
 ```bash
 brightspace-auth
 ```
 
-Or if you prefer, you can also run it with npm:
+Approve the MFA push on your phone.
 
+### Step 4: Configure your MCP client
+
+Add this to your MCP client config:
+
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on Mac):
+
+```json
+{
+  "mcpServers": {
+    "brightspace": {
+      "command": "npx",
+      "args": ["-y", "brightspace-mcp-server@latest"]
+    }
+  }
+}
+```
+
+**Cursor** (`~/.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "brightspace": {
+      "command": "npx",
+      "args": ["-y", "brightspace-mcp-server@latest"]
+    }
+  }
+}
+```
+
+**ChatGPT Desktop**: Go to Settings > MCP Servers > Add Server. Set command to `npx` and argument to `-y brightspace-mcp-server@latest`.
+
+Restart your MCP client after configuring.
+
+</details>
+
+## Updates
+
+Updates are automatic. The `npx brightspace-mcp-server@latest` config in your MCP client always pulls the newest version on launch. No action needed.
+
+To manually update a global install:
 ```bash
-npm run auth
+npm install -g brightspace-mcp-server@latest
 ```
-
-**What happens:**
-1. A browser window will open and log in automatically using your `.env` credentials
-2. Approve the MFA push notification on your phone (Purdue students: approve the Duo push)
-3. The browser will close automatically once authenticated
-
-**Note:** You only need to do this once. The session lasts about 1 hour. When it expires, just run `npm run auth` again.
-
-### Step 6: Configure your MCP client
-
-Choose the setup instructions for your MCP client:
-
-#### Claude Desktop
-
-**Config file location:**
-- **Mac**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
-Open the config file in a text editor and add this configuration (if the file doesn't exist, create it):
-
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "node",
-      "args": ["/absolute/path/to/brightspace-mcp-server/build/index.js"]
-    }
-  }
-}
-```
-
-**Important:** Replace `/absolute/path/to/brightspace-mcp-server` with the actual path on your computer.
-
-To find the path:
-- **Mac/Linux**: In Terminal, go to the project directory and run `pwd`
-- **Windows**: In Command Prompt, go to the project directory and run `cd`
-
-**Example (Mac):**
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "node",
-      "args": ["/Users/username/brightspace-mcp-server/build/index.js"]
-    }
-  }
-}
-```
-
-**Example (Windows):**
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "node",
-      "args": ["C:\\Users\\username\\brightspace-mcp-server\\build\\index.js"]
-    }
-  }
-}
-```
-
-See `claude-desktop-config.example.json` for the full example.
-
-#### Cursor
-
-**Config file location (choose one):**
-- **Project-level**: `.cursor/mcp.json` in the project root
-- **Global** (recommended for this server): `~/.cursor/mcp.json`
-
-Create or open the config file and add this configuration:
-
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "node",
-      "args": ["/absolute/path/to/brightspace-mcp-server/build/index.js"]
-    }
-  }
-}
-```
-
-**Important:** Replace `/absolute/path/to/brightspace-mcp-server` with the actual path on your computer (use `pwd` on Mac/Linux or `cd` on Windows to find it).
-
-**Example (Mac):**
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "node",
-      "args": ["/Users/username/brightspace-mcp-server/build/index.js"]
-    }
-  }
-}
-```
-
-**Example (Windows):**
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "node",
-      "args": ["C:\\Users\\username\\brightspace-mcp-server\\build\\index.js"]
-    }
-  }
-}
-```
-
-Save the file and **restart Cursor** to load the MCP server.
-
-See `cursor-config.example.json` for the full example.
-
-#### ChatGPT Desktop
-
-ChatGPT Desktop configures MCP servers through its Settings UI, not a JSON file.
-
-**Setup steps:**
-1. Open ChatGPT Desktop
-2. Go to **Settings**
-3. Scroll down to find **"MCP Servers"** (may be under a Features or Tools section)
-4. Click **"Add Server"** (or similar button)
-5. Enter the following:
-   - **Server name**: `brightspace`
-   - **Command**: `node`
-   - **Argument**: `/absolute/path/to/brightspace-mcp-server/build/index.js` (replace with your actual path)
-
-To find your path:
-- **Mac/Linux**: In Terminal, go to the project directory and run `pwd`
-- **Windows**: In Command Prompt, go to the project directory and run `cd`
-
-**Example paths:**
-- Mac: `/Users/username/brightspace-mcp-server/build/index.js`
-- Windows: `C:\Users\username\brightspace-mcp-server\build\index.js`
-
-**Note:** ChatGPT Desktop's MCP support may be in beta or rolling out gradually. If you don't see the MCP Servers option yet, check for app updates.
-
-See `chatgpt-desktop-config.example.json` for a reference config structure.
-
----
-
-After configuring your MCP client, **restart it completely** (quit and reopen, not just close the window).
-
-### Step 7: Verify it works
-
-1. Open your MCP client
-2. Start a new conversation
-3. Try asking: **"What are my courses?"**
-
-If it works, you'll see a list of your Brightspace courses!
 
 ## Available Tools
 
@@ -269,29 +156,20 @@ If it works, you'll see a list of your Brightspace courses!
 | `download_file` | Download course files or submission attachments |
 | `get_classlist_emails` | Get email addresses for instructors and TAs |
 | `get_roster` | Get course roster (instructors, TAs, optionally students) |
-
-## Purdue Quick Start
-
-If you're a Purdue student, here's the TL;DR:
-
-1. Clone, `npm install`, `npm run build`, `npm link`
-2. Copy `.env.example` to `.env`, set `D2L_BASE_URL=https://purdue.brightspace.com`, and add your Purdue career account credentials
-3. Run `brightspace-auth` and approve the Duo push
-4. Add the server to Claude Desktop / ChatGPT / Cursor (see config examples above)
-5. Ask "What are my courses?" and you're good to go
+| `get_discussions` | Get course discussion topics and posts |
 
 ## Advanced Configuration
 
 ### Filter courses
 
-If you have a lot of courses and want to hide some, you can add course filters to your MCP client config:
+Add course filters via environment variables in your MCP client config:
 
 ```json
 {
   "mcpServers": {
     "brightspace": {
-      "command": "node",
-      "args": ["/absolute/path/to/brightspace-mcp-server/build/index.js"],
+      "command": "npx",
+      "args": ["-y", "brightspace-mcp-server@latest"],
       "env": {
         "D2L_INCLUDE_COURSES": "123456,789012",
         "D2L_EXCLUDE_COURSES": "111111,222222",
@@ -302,64 +180,49 @@ If you have a lot of courses and want to hide some, you can add course filters t
 }
 ```
 
-**Options:**
 - `D2L_INCLUDE_COURSES`: Only show these course IDs (comma-separated). Overrides other filters.
 - `D2L_EXCLUDE_COURSES`: Hide these course IDs (comma-separated).
 - `D2L_ACTIVE_ONLY`: Set to `"false"` to show inactive courses (default: `"true"`).
 
-**How to find course IDs:**
-Ask "What are my courses?" and the tool will show the IDs.
+To find course IDs, ask "What are my courses?" and the tool will show them.
 
 ### Re-authenticate
 
-Your Brightspace session expires after about 1 hour. When it does, the server will report "Not authenticated."
+Your session expires after about 1 hour. When it does, the server will attempt auto-reauthentication. If that fails:
 
-To log in again:
 ```bash
-brightspace-auth
+npx brightspace-mcp-server auth
 ```
 
 You don't need to restart your MCP client after re-authenticating.
 
-## Updating
-
-To update to the latest version:
-
-```bash
-brightspace-update
-```
-
-This pulls the latest code, installs any new dependencies, and rebuilds automatically. Restart your MCP client after updating.
-
 ## Troubleshooting
 
 **"Not authenticated" error**
-- **Solution**: Run `brightspace-auth` (or `npm run auth` in the project directory). The browser will open and you'll log in again.
+- Run `npx brightspace-mcp-server auth` to re-authenticate.
 
 **MCP client doesn't respond to Brightspace queries**
-- **Solution 1**: Restart your MCP client completely (quit and reopen, not just close the window).
-- **Solution 2**: Check that the path in your MCP config is correct and points to `build/index.js`.
-- **Solution 3**: Make sure you ran `npm run build` after any code changes.
+- Restart your MCP client completely (quit and reopen).
+- Make sure Node.js 18+ is installed and `npx` is available in your PATH.
 
 **Browser doesn't open during authentication**
-- **Solution**: Make sure you have a default browser set. Try running `npm run auth` again. If it still doesn't work, check that Chromium was installed correctly with `npx playwright install chromium`.
+- Try running the auth command again. If Chromium wasn't installed, it will be downloaded automatically on first use via the postinstall hook.
 
-**Authentication fails on Windows**
-- **Solution 1**: Make sure your `.env` file is in the project root directory (same folder as `package.json`) with your credentials filled in. The auth CLI reads credentials from this file.
-- **Solution 2**: Run `npm run auth` from the project directory (not `brightspace-auth` globally) to ensure the `.env` file is found.
-- **Solution 3**: If Chromium fails to install, run `npx playwright install chromium` manually.
+**Setup wizard issues**
+- Run `npx brightspace-mcp-server setup` again to reconfigure.
+- Config is stored at `~/.brightspace-mcp/config.json` — you can edit it directly.
 
 ## Security
 
-- Your credentials are never stored in this repository or in the code.
-- Session tokens are encrypted using AES-256-GCM and stored in `~/.d2l-session/` (outside this project).
-- Token files have restricted permissions (only your user account can read them).
-- Tokens expire after about 1 hour for security.
+- Your credentials are stored locally in `~/.brightspace-mcp/config.json` with restricted file permissions (owner-only read/write).
+- Session tokens are encrypted using AES-256-GCM and stored in `~/.d2l-session/`.
+- Tokens expire after about 1 hour.
 - All communication with Brightspace uses HTTPS.
+- Credentials are never sent anywhere except your institution's login page.
 
 ## Contributing
 
-Found a bug or have a feature request? Open an issue on GitHub!
+Found a bug or have a feature request? [Open an issue on GitHub!](https://github.com/rohanmuppa/brightspace-mcp-server/issues)
 
 ## License
 
