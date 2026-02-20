@@ -12,10 +12,11 @@ Works with any school that uses Brightspace.
 
 ## Try It
 
+> "Generate me a practice quiz from this week's lecture slides"
+> "Build a study guide for my upcoming midterms using my course content"
+> "Explain the concepts from today's ECE 264 lecture in simple terms"
 > "What assignments are due this week?"
-> "Show my grades for CS 252"
 > "Download the lecture slides from Module 3"
-> "Who is the instructor for MATH 266?"
 
 ## Get Started
 
