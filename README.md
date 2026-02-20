@@ -76,4 +76,6 @@ Automatic. Your AI client pulls the latest version every time it starts. No acti
 
 ---
 
+Proudly made for Boilermakers by [Rohan Muppa](https://github.com/rohanmuppa) 🚂
+
 [Report a bug](https://github.com/rohanmuppa/brightspace-mcp-server/issues) · AGPL-3.0 · Copyright 2026 Rohan Muppa
