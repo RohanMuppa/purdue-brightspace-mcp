@@ -14,8 +14,6 @@ Works with any school that uses Brightspace.
 
 > "Download my lecture slides and turn them into interactive flashcards"
 > "Grab every assignment rubric and build me a visual dashboard of what I need to hit for an A"
-> "What's due this week across all my classes?"
-> "Download the Module 5 PDFs and summarize each one in 3 bullet points"
 
 ## Get Started
 
