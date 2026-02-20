@@ -8,9 +8,9 @@ Originally built for Purdue University's Brightspace, but works with any institu
 
 ## Architecture
 
-&lt;p align="center"&gt;
-  &lt;img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%"&gt;
-&lt;/p&gt;
+<p align="center">
+  <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
+</p>
 
 ## What You Can Do
 
