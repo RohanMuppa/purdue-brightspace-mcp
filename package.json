@@ -7,10 +7,16 @@
   "bin": {
     "brightspace-mcp-server": "build/index.js",
     "brightspace-auth": "build/auth-cli.js",
-    "brightspace-update": "build/update.js"
+    "brightspace-setup": "build/setup.js"
   },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node build/index.js",
     "auth": "node build/auth-cli.js",
     "update": "node build/update.js",

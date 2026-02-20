@@ -1,0 +1,12 @@
+src/
+tsconfig.json
+.env
+.env.*
+*.ts
+!*.d.ts
+.github/
+.claude/
+.planning/
+node_modules/
+tests/
+vitest.config.*
