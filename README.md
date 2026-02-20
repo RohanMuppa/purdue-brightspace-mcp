@@ -70,6 +70,15 @@ npx brightspace-mcp-server auth
 - All traffic to Brightspace is HTTPS
 - Nothing is sent anywhere except your school's login page
 
+## Built With
+
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
+![Node.js](https://img.shields.io/badge/Node.js-339933?logo=nodedotjs&logoColor=white)
+![Playwright](https://img.shields.io/badge/Playwright-2EAD33?logo=playwright&logoColor=white)
+![MCP](https://img.shields.io/badge/Model_Context_Protocol-black?logo=anthropic&logoColor=white)
+![D2L Brightspace](https://img.shields.io/badge/D2L_Brightspace-003865?logoColor=white)
+![npm](https://img.shields.io/badge/npm-CB3837?logo=npm&logoColor=white)
+
 ## Updates
 
 Automatic. Your AI client pulls the latest version every time it starts. No action needed.
