@@ -14,7 +14,8 @@ No Co-Authored-By lines. No phase/plan numbers.
 
 ## npm Publishing
 
-- `npm publish --otp=CODE` to publish
+- Auto-publishes via GitHub Actions on push to main (when version in package.json changes)
+- NPM_TOKEN secret in GitHub repo settings (expires Apr 21, 2026)
 - README and description on npm are baked in at publish time, so always publish after README changes
 - The MCP client config uses `npx brightspace-mcp-server@latest` so users auto-update
 

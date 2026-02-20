@@ -207,10 +207,17 @@ function configureMcpClient(configPath: string): boolean {
   }
 
   // Add/update brightspace entry
-  config.mcpServers["brightspace"] = {
-    command: "npx",
-    args: ["-y", "brightspace-mcp-server@latest"],
-  };
+  // On Windows, npx is a .cmd shim that must be invoked through cmd.exe
+  const isWindows = process.platform === "win32";
+  config.mcpServers["brightspace"] = isWindows
+    ? {
+        command: "cmd",
+        args: ["/c", "npx", "-y", "brightspace-mcp-server@latest"],
+      }
+    : {
+        command: "npx",
+        args: ["-y", "brightspace-mcp-server@latest"],
+      };
 
   // Ensure parent directory exists
   const dir = path.dirname(configPath);

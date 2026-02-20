@@ -4,6 +4,8 @@
 
 Talk to your Brightspace courses with AI. Ask about grades, due dates, announcements, and more. Works with Claude, ChatGPT, and Cursor.
 
+This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server. MCP lets AI apps like Claude talk to outside tools. This server connects your AI to Brightspace so it can pull your grades, assignments, and course content on demand.
+
 Works with any school that uses Brightspace.
 
 <p align="center">
