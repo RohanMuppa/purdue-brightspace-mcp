@@ -1,8 +1,8 @@
 # Brightspace MCP Server
 
-> **By [Rohan Muppa](https://github.com/rohanmuppa) — ECE @ Purdue**
+> **By [Rohan Muppa](https://github.com/rohanmuppa)  - ECE @ Purdue**
 
-Talk to your Brightspace courses with AI. Ask about grades, due dates, announcements, and more — right from Claude, ChatGPT, or Cursor.
+Talk to your Brightspace courses with AI. Ask about grades, due dates, announcements, and more  - right from Claude, ChatGPT, or Cursor.
 
 Works with any school that uses Brightspace.
 
@@ -31,7 +31,7 @@ npx brightspace-mcp-server setup --purdue
 npx brightspace-mcp-server setup
 ```
 
-The wizard handles everything — credentials, MFA, and configuring your AI client. When it's done, restart Claude/ChatGPT/Cursor and start asking questions.
+The wizard handles everything  - credentials, MFA, and configuring your AI client. When it's done, restart Claude/ChatGPT/Cursor and start asking questions.
 
 ## Session Expired?
 
@@ -56,13 +56,13 @@ npx brightspace-mcp-server auth
 
 ## Troubleshooting
 
-**"Not authenticated"** — Run `npx brightspace-mcp-server auth`
+**"Not authenticated"**  - Run `npx brightspace-mcp-server auth`
 
-**AI client not responding** — Quit and reopen it completely (not just close the window)
+**AI client not responding**  - Quit and reopen it completely (not just close the window)
 
-**Need to redo setup** — Run `npx brightspace-mcp-server setup` again
+**Need to redo setup**  - Run `npx brightspace-mcp-server setup` again
 
-**Config location** — `~/.brightspace-mcp/config.json` (you can edit this directly)
+**Config location**  - `~/.brightspace-mcp/config.json` (you can edit this directly)
 
 ## Security
 
@@ -73,7 +73,7 @@ npx brightspace-mcp-server auth
 
 ## Updates
 
-Automatic. Your AI client pulls the latest version every time it starts — no action needed.
+Automatic. Your AI client pulls the latest version every time it starts  - no action needed.
 
 ---
 
