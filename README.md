@@ -12,11 +12,10 @@ Works with any school that uses Brightspace.
 
 ## Try It
 
-> "Generate me a practice quiz from this week's lecture slides"
-> "Build a study guide for my upcoming midterms using my course content"
-> "Explain the concepts from today's ECE 264 lecture in simple terms"
-> "What assignments are due this week?"
-> "Download the lecture slides from Module 3"
+> "Download my lecture slides and turn them into interactive flashcards"
+> "Grab every assignment rubric and build me a visual dashboard of what I need to hit for an A"
+> "What's due this week across all my classes?"
+> "Download the Module 5 PDFs and summarize each one in 3 bullet points"
 
 ## Get Started
 
