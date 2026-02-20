@@ -16,7 +16,7 @@ import { log } from "../utils/logger.js";
 const AUTH_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
 
 /**
- * Launches the purdue-brightspace-auth CLI as a child process to
+ * Launches the brightspace-auth CLI as a child process to
  * re-authenticate when the current session has expired.
  *
  * The child process inherits the parent's environment (so .env credentials
@@ -48,7 +48,7 @@ export class AuthRunner {
 
     this.running = true;
     try {
-      log("INFO", "Auto-launching purdue-brightspace-auth...");
+      log("INFO", "Auto-launching brightspace-auth...");
 
       return await new Promise<boolean>((resolve) => {
         execFile(

@@ -179,7 +179,7 @@ export class D2LApiClient {
       }
       log("WARN", "Auto-reauthentication did not produce a valid token");
     }
-    throw new ApiError(401, path, "Session expired. Please re-authenticate via purdue-brightspace-auth CLI.");
+    throw new ApiError(401, path, "Session expired. Please re-authenticate via brightspace-auth.");
   }
 
   /**
@@ -212,7 +212,7 @@ export class D2LApiClient {
           throw new ApiError(
             401,
             path,
-            "Session expired. Please re-authenticate via purdue-brightspace-auth CLI.",
+            "Session expired. Please re-authenticate via brightspace-auth.",
           );
         }
 
@@ -226,7 +226,7 @@ export class D2LApiClient {
           throw new ApiError(
             401,
             path,
-            "Session expired. Please re-authenticate via purdue-brightspace-auth CLI.",
+            "Session expired. Please re-authenticate via brightspace-auth.",
           );
         }
 
@@ -310,7 +310,7 @@ export class D2LApiClient {
           throw new ApiError(
             401,
             path,
-            "Session expired. Please re-authenticate via purdue-brightspace-auth CLI.",
+            "Session expired. Please re-authenticate via brightspace-auth.",
           );
         }
 
@@ -324,7 +324,7 @@ export class D2LApiClient {
           throw new ApiError(
             401,
             path,
-            "Session expired. Please re-authenticate via purdue-brightspace-auth CLI.",
+            "Session expired. Please re-authenticate via brightspace-auth.",
           );
         }
 
@@ -384,7 +384,7 @@ export class D2LApiClient {
   private buildAuthHeaders(token: TokenData): Record<string, string> {
     const headers: Record<string, string> = {
       "User-Agent":
-        "PurdueBrightspaceMCP/1.0 (Rohan Muppa; github.com/rohanmuppa/purdue-brightspace-mcp)",
+        "BrightspaceMCP/1.0 (Rohan Muppa; github.com/rohanmuppa/brightspace-mcp-server)",
     };
 
     // Auto-detect cookie vs Bearer auth based on "cookie:" prefix

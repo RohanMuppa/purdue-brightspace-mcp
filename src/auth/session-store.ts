@@ -20,7 +20,7 @@ const SESSION_VERSION = 1;
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12; // GCM recommended IV length
 const AUTH_TAG_LENGTH = 16; // GCM auth tag length
-const SALT = "purdue-brightspace-mcp-salt";
+const SALT = "brightspace-mcp-salt";
 
 /**
  * SessionStore manages encrypted token persistence to disk.
