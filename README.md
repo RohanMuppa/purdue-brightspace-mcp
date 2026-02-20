@@ -15,7 +15,7 @@ Works with any school that uses Brightspace.
 > "Download my lecture slides and turn them into interactive flashcards"
 > "Grab every assignment rubric and build me a visual dashboard of what I need to hit for an A"
 
-## Steps To Install and Use
+## Steps to Install
 
 **You need:** [Node.js 18+](https://nodejs.org/) (download the LTS version)
 
