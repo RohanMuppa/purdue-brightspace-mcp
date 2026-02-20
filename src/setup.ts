@@ -24,6 +24,28 @@ const yellow = (s: string) => `\x1b[33m${s}\x1b[0m`;
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 
+// ── School presets ──────────────────────────────────────────────────
+
+interface SchoolPreset {
+  name: string;
+  baseUrl: string;
+  usernameLabel: string;
+  mfaNote: string;
+}
+
+const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
+  purdue: {
+    name: "Purdue University",
+    baseUrl: "https://purdue.brightspace.com",
+    usernameLabel: "Purdue career account username",
+    mfaNote: "Approve the Duo push on your phone.",
+  },
+};
+
+// Parse --purdue, --osu, etc. from argv
+const schoolFlag = process.argv.find((a) => a.startsWith("--"))?.replace(/^--/, "").toLowerCase();
+const preset = schoolFlag ? SCHOOL_PRESETS[schoolFlag] : undefined;
+
 // ── Readline helpers ───────────────────────────────────────────────
 
 function ask(rl: readline.Interface, question: string): Promise<string> {
@@ -233,8 +255,13 @@ async function main(): Promise<void> {
   });
 
   console.log("");
-  console.log(bold("Brightspace MCP Server — Setup Wizard"));
-  console.log("======================================");
+  if (preset) {
+    console.log(bold(`Brightspace MCP Server — ${preset.name} Setup`));
+    console.log("=".repeat(`Brightspace MCP Server — ${preset.name} Setup`.length));
+  } else {
+    console.log(bold("Brightspace MCP Server — Setup Wizard"));
+    console.log("======================================");
+  }
   console.log("");
 
   const rl = readline.createInterface({
@@ -244,25 +271,34 @@ async function main(): Promise<void> {
 
   // ── Step 1: Brightspace URL ──────────────────────────────────────
   let baseUrl = "";
-  while (!baseUrl) {
-    const raw = await ask(
-      rl,
-      "What is your Brightspace URL? (e.g., purdue.brightspace.com): ",
-    );
-    const normalized = normalizeUrl(raw);
-    if (!raw || !isValidUrl(normalized)) {
-      console.log(yellow("  Please enter a valid URL (e.g., purdue.brightspace.com)"));
-      continue;
+  if (preset) {
+    baseUrl = preset.baseUrl;
+    console.log(dim(`  Brightspace URL: ${baseUrl}`));
+    console.log("");
+  } else {
+    while (!baseUrl) {
+      const raw = await ask(
+        rl,
+        "What is your Brightspace URL? (e.g., purdue.brightspace.com): ",
+      );
+      const normalized = normalizeUrl(raw);
+      if (!raw || !isValidUrl(normalized)) {
+        console.log(yellow("  Please enter a valid URL (e.g., purdue.brightspace.com)"));
+        continue;
+      }
+      baseUrl = normalized;
     }
-    baseUrl = normalized;
+    console.log(dim(`  → ${baseUrl}`));
+    console.log("");
   }
-  console.log(dim(`  → ${baseUrl}`));
-  console.log("");
 
   // ── Step 2: Username ─────────────────────────────────────────────
+  const usernamePrompt = preset
+    ? `What is your ${preset.usernameLabel}? `
+    : "What is your Brightspace username? ";
   let username = "";
   while (!username) {
-    username = await ask(rl, "What is your Brightspace username? ");
+    username = await ask(rl, usernamePrompt);
     if (!username) {
       console.log(yellow("  Username is required."));
     }
@@ -273,9 +309,12 @@ async function main(): Promise<void> {
   // Close the rl temporarily since askPassword manages its own
   rl.close();
 
+  const passwordPrompt = preset
+    ? `What is your ${preset.usernameLabel.replace("username", "password")}? `
+    : "What is your Brightspace password? ";
   let password = "";
   while (!password) {
-    password = await askPassword("What is your Brightspace password? ");
+    password = await askPassword(passwordPrompt);
     if (!password) {
       console.log(yellow("  Password is required."));
     }
@@ -291,8 +330,9 @@ async function main(): Promise<void> {
   // ── Step 4: MFA config ───────────────────────────────────────────
   let mfaTotpSecret: string | undefined;
 
-  const useMfa = await ask(rl2, "Do you use Duo MFA? (yes/no): ");
-  if (/^y(es)?$/i.test(useMfa)) {
+  if (preset) {
+    // School preset — we know they use Duo
+    console.log(dim(`  MFA: ${preset.mfaNote}`));
     const totp = await ask(
       rl2,
       "Do you have a TOTP secret key? (paste it, or press Enter to use push notifications): ",
@@ -302,6 +342,20 @@ async function main(): Promise<void> {
       console.log(dim("  → TOTP secret saved. MFA will be handled automatically."));
     } else {
       console.log(dim("  → Will use Duo push notifications."));
+    }
+  } else {
+    const useMfa = await ask(rl2, "Do you use Duo MFA? (yes/no): ");
+    if (/^y(es)?$/i.test(useMfa)) {
+      const totp = await ask(
+        rl2,
+        "Do you have a TOTP secret key? (paste it, or press Enter to use push notifications): ",
+      );
+      if (totp) {
+        mfaTotpSecret = totp;
+        console.log(dim("  → TOTP secret saved. MFA will be handled automatically."));
+      } else {
+        console.log(dim("  → Will use Duo push notifications."));
+      }
     }
   }
   console.log("");

@@ -48,7 +48,13 @@ The setup wizard will walk you through everything:
 
 That's it. Open your MCP client and ask "What are my courses?"
 
-> **Purdue students:** When prompted, use `purdue.brightspace.com` as your URL and your Purdue career account credentials.
+### Purdue Students
+
+```bash
+npx brightspace-mcp-server setup --purdue
+```
+
+Skips the URL prompt, uses Purdue-specific labels, and knows you have Duo MFA. Just enter your career account credentials and you're in.
 
 ## Updates
 
