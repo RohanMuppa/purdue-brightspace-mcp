@@ -35,7 +35,7 @@ The wizard handles everything: credentials, MFA, and configuring your AI client.
 
 ## Session Expired?
 
-Sessions last about 1 hour. If you get an auth error:
+Sessions re-authenticate automatically. If auto-reauth fails (e.g., you missed the Duo push):
 
 ```bash
 npx brightspace-mcp-server auth
