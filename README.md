@@ -1,158 +1,80 @@
 # Brightspace MCP Server
 
-> **Created by [Rohan Muppa](https://github.com/rohanmuppa). ECE @ Purdue**
+> **By [Rohan Muppa](https://github.com/rohanmuppa) — ECE @ Purdue**
 
-Access your Brightspace (D2L) courses using natural language. Get grades, due dates, announcements, rosters, and more — works with any Brightspace instance. Compatible with any MCP client (Claude Desktop, ChatGPT Desktop, Claude Code, Cursor, etc.).
+Talk to your Brightspace courses with AI. Ask about grades, due dates, announcements, and more — right from Claude, ChatGPT, or Cursor.
 
-Originally built for Purdue University's Brightspace, but works with any institution that uses D2L Brightspace as their LMS.
-
-## Architecture
+Works with any school that uses Brightspace.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
 </p>
 
-## What You Can Do
+## Try It
 
-- "What assignments are due this week?"
-- "Show my grades for CS 252"
-- "What announcements did my professors post today?"
-- "Who is the instructor for MATH 266?"
-- "Download the lecture slides from Module 3"
-- "What's my grade in all my classes?"
-- "Get me the roster emails for my CS course"
+> "What assignments are due this week?"
+> "Show my grades for CS 252"
+> "Download the lecture slides from Module 3"
+> "Who is the instructor for MATH 266?"
 
-## Quick Start
+## Get Started
 
-### Prerequisites
+**You need:** [Node.js 18+](https://nodejs.org/) (download the LTS version)
 
-**Node.js** (version 18 or higher) — [download here](https://nodejs.org/) (choose LTS).
-
-To check if you have it:
-```bash
-node --version
-```
-
-### Install & Setup (One Command)
-
-```bash
-npx brightspace-mcp-server setup
-```
-
-The setup wizard will walk you through everything:
-
-1. Enter your Brightspace URL (e.g., `purdue.brightspace.com`)
-2. Enter your username and password
-3. Configure MFA (Duo push or TOTP)
-4. Automatically configure Claude Desktop / Cursor
-
-That's it. Open your MCP client and ask "What are my courses?"
-
-### Purdue Students
-
+**Purdue students:**
 ```bash
 npx brightspace-mcp-server setup --purdue
 ```
 
-Skips the URL prompt, uses Purdue-specific labels, and knows you have Duo MFA. Just enter your career account credentials and you're in.
-
-## Updates
-
-Updates are automatic. The `npx brightspace-mcp-server@latest` config in your MCP client always pulls the newest version on launch. No action needed.
-
-To manually update a global install:
+**Everyone else:**
 ```bash
-npm install -g brightspace-mcp-server@latest
+npx brightspace-mcp-server setup
 ```
 
-## Available Tools
+The wizard handles everything — credentials, MFA, and configuring your AI client. When it's done, restart Claude/ChatGPT/Cursor and start asking questions.
 
-| Tool | Description |
-|------|-------------|
-| `check_auth` | Check if you're logged in to Brightspace |
-| `get_my_courses` | Get all your enrolled courses |
-| `get_upcoming_due_dates` | Get assignments and quizzes due soon |
-| `get_my_grades` | Get your grades for one or all courses |
-| `get_announcements` | Get course announcements |
-| `get_assignments` | Get detailed assignment and quiz information |
-| `get_course_content` | Browse course content (modules, files, links) |
-| `download_file` | Download course files or submission attachments |
-| `get_classlist_emails` | Get email addresses for instructors and TAs |
-| `get_roster` | Get course roster (instructors, TAs, optionally students) |
-| `get_discussions` | Get course discussion topics and posts |
+## Session Expired?
 
-## Advanced Configuration
-
-### Filter courses
-
-Add course filters via environment variables in your MCP client config:
-
-```json
-{
-  "mcpServers": {
-    "brightspace": {
-      "command": "npx",
-      "args": ["-y", "brightspace-mcp-server@latest"],
-      "env": {
-        "D2L_INCLUDE_COURSES": "123456,789012",
-        "D2L_EXCLUDE_COURSES": "111111,222222",
-        "D2L_ACTIVE_ONLY": "true"
-      }
-    }
-  }
-}
-```
-
-- `D2L_INCLUDE_COURSES`: Only show these course IDs (comma-separated). Overrides other filters.
-- `D2L_EXCLUDE_COURSES`: Hide these course IDs (comma-separated).
-- `D2L_ACTIVE_ONLY`: Set to `"false"` to show inactive courses (default: `"true"`).
-
-To find course IDs, ask "What are my courses?" and the tool will show them.
-
-### Re-authenticate
-
-Your session expires after about 1 hour. When it does, the server will attempt auto-reauthentication. If that fails:
+Sessions last about 1 hour. If you get an auth error:
 
 ```bash
 npx brightspace-mcp-server auth
 ```
 
-You don't need to restart your MCP client after re-authenticating.
+## What You Can Ask About
+
+| Topic | Examples |
+|-------|---------|
+| Courses | "What are my courses?" |
+| Grades | "What's my grade in CS 252?" |
+| Assignments | "What's due this week?" |
+| Announcements | "Any new announcements?" |
+| Content | "Show me Module 3 files" |
+| Downloads | "Download the syllabus" |
+| Roster | "Who teaches this class?" |
+| Discussions | "Show recent discussion posts" |
 
 ## Troubleshooting
 
-**"Not authenticated" error**
-- Run `npx brightspace-mcp-server auth` to re-authenticate.
+**"Not authenticated"** — Run `npx brightspace-mcp-server auth`
 
-**MCP client doesn't respond to Brightspace queries**
-- Restart your MCP client completely (quit and reopen).
-- Make sure Node.js 18+ is installed and `npx` is available in your PATH.
+**AI client not responding** — Quit and reopen it completely (not just close the window)
 
-**Browser doesn't open during authentication**
-- Try running the auth command again. If Chromium wasn't installed, it will be downloaded automatically on first use via the postinstall hook.
+**Need to redo setup** — Run `npx brightspace-mcp-server setup` again
 
-**Setup wizard issues**
-- Run `npx brightspace-mcp-server setup` again to reconfigure.
-- Config is stored at `~/.brightspace-mcp/config.json` — you can edit it directly.
+**Config location** — `~/.brightspace-mcp/config.json` (you can edit this directly)
 
 ## Security
 
-- Your credentials are stored locally in `~/.brightspace-mcp/config.json` with restricted file permissions (owner-only read/write).
-- Session tokens are encrypted using AES-256-GCM and stored in `~/.d2l-session/`.
-- Tokens expire after about 1 hour.
-- All communication with Brightspace uses HTTPS.
-- Credentials are never sent anywhere except your institution's login page.
+- Credentials stay on your machine in `~/.brightspace-mcp/config.json` (restricted permissions)
+- Session tokens are encrypted (AES-256-GCM)
+- All traffic to Brightspace is HTTPS
+- Nothing is sent anywhere except your school's login page
 
-## Contributing
+## Updates
 
-Found a bug or have a feature request? [Open an issue on GitHub!](https://github.com/rohanmuppa/brightspace-mcp-server/issues)
+Automatic. Your AI client pulls the latest version every time it starts — no action needed.
 
-## License
+---
 
-AGPL-3.0-only — Copyright (c) 2026 Rohan Muppa
-
-## Author
-
-**Rohan Muppa** — ECE @ Purdue University
-GitHub: [@rohanmuppa](https://github.com/rohanmuppa)
-Project: [brightspace-mcp-server](https://github.com/rohanmuppa/brightspace-mcp-server)
+[Report a bug](https://github.com/rohanmuppa/brightspace-mcp-server/issues) · AGPL-3.0 · Copyright 2026 Rohan Muppa
