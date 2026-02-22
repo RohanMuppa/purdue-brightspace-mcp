@@ -37,6 +37,53 @@ The wizard handles everything: credentials, MFA, and configuring your AI client.
 
 That's it! You're ready to go.
 
+## Manual Configuration
+
+The setup wizard auto-configures Claude Desktop and Cursor. For other clients, add the server manually:
+
+**Claude Code (CLI):**
+```bash
+claude mcp add brightspace -- npx -y brightspace-mcp-server@latest
+```
+
+**Claude Desktop** (manually — `~/Library/Application Support/Claude/claude_desktop_config.json` on Mac, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+```json
+{
+  "mcpServers": {
+    "brightspace": {
+      "command": "npx",
+      "args": ["-y", "brightspace-mcp-server@latest"]
+    }
+  }
+}
+```
+
+**Windows users** — use this format instead:
+```json
+{
+  "mcpServers": {
+    "brightspace": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "brightspace-mcp-server@latest"]
+    }
+  }
+}
+```
+
+**Cursor** (`~/.cursor/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "brightspace": {
+      "command": "npx",
+      "args": ["-y", "brightspace-mcp-server@latest"]
+    }
+  }
+}
+```
+
+After adding, restart your AI client. You still need to run `npx brightspace-mcp-server setup` first to save your credentials.
+
 ## Session Expired?
 
 Sessions re-authenticate automatically. If auto-reauth fails (e.g., you missed the Duo push):
@@ -92,7 +139,11 @@ npx brightspace-mcp-server auth
 
 ## Updates
 
-Automatic. Your AI client pulls the latest version every time it starts. No action needed.
+The `@latest` tag in the config tells npx to pull the newest version each time your AI client starts. In most cases this works automatically. If you suspect you're on an old version, force a fresh install:
+
+```bash
+npm cache clean --force
+```
 
 ---
 
