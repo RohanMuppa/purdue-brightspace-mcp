@@ -147,11 +147,9 @@ npx brightspace-mcp-server auth
 
 ## Updates
 
-The `@latest` tag in the config tells npx to pull the newest version each time your AI client starts. In most cases this works automatically. If you suspect you're on an old version, force a fresh install:
+Automatic. Every time your AI client starts a session, it runs `npx brightspace-mcp-server@latest` which pulls the newest version from npm. No action needed.
 
-```bash
-npm cache clean --force
-```
+If you ever suspect you're on an old version, run `npm cache clean --force` to clear the cache.
 
 ---
 
