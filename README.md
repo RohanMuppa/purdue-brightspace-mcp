@@ -41,6 +41,8 @@ That's it! You're ready to go.
 
 The setup wizard auto-configures Claude Desktop and Cursor. For other clients, add the server manually:
 
+> **💡 Tip:** Already using Claude Code, Codex, or another AI coding assistant? Just paste this README and ask it to configure the Brightspace MCP for you. It can read the instructions below and run the setup automatically.
+
 **Claude Code (CLI):**
 ```bash
 claude mcp add brightspace -- npx -y brightspace-mcp-server@latest
