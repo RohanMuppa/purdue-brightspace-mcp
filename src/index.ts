@@ -55,10 +55,16 @@ if (subcommand === 'setup') {
       // Create MCP server instance
       const server = new McpServer({
         name: "brightspace",
-        version: "1.0.0",
-        description: "Brightspace MCP Server by Rohan Muppa",
+        version: "1.0.6",
+        description: "Brightspace MCP Server — by Rohan Muppa (github.com/rohanmuppa/brightspace-mcp-server)",
       });
-      log("DEBUG", "MCP Server instance created");
+      log("INFO", "");
+      log("INFO", "========================================");
+      log("INFO", "  Brightspace MCP Server v1.0.6");
+      log("INFO", "  By Rohan Muppa — ECE @ Purdue");
+      log("INFO", "  github.com/rohanmuppa/brightspace-mcp-server");
+      log("INFO", "========================================");
+      log("INFO", "");
 
       // Create TokenManager for reading cached tokens
       const tokenManager = new TokenManager(config.sessionDir);

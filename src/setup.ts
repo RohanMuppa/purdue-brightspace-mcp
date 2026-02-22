@@ -269,6 +269,7 @@ async function main(): Promise<void> {
     console.log(bold("Brightspace MCP Server — Setup Wizard"));
     console.log("======================================");
   }
+  console.log(dim("  By Rohan Muppa — github.com/rohanmuppa/brightspace-mcp-server"));
   console.log("");
 
   const rl = readline.createInterface({
