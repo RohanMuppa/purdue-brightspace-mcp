@@ -46,7 +46,9 @@ The setup wizard auto-configures Claude Desktop and Cursor. For other clients, a
 claude mcp add brightspace -- npx -y brightspace-mcp-server@latest
 ```
 
-**Claude Desktop** (manually — `~/Library/Application Support/Claude/claude_desktop_config.json` on Mac, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+**Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json` on Mac, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+Mac/Linux:
 ```json
 {
   "mcpServers": {
@@ -58,7 +60,7 @@ claude mcp add brightspace -- npx -y brightspace-mcp-server@latest
 }
 ```
 
-**Windows users** — use this format instead:
+Windows:
 ```json
 {
   "mcpServers": {
@@ -71,6 +73,8 @@ claude mcp add brightspace -- npx -y brightspace-mcp-server@latest
 ```
 
 **ChatGPT Desktop** (Settings → Tools → Add MCP tool → "Add manually"):
+
+Mac/Linux:
 ```json
 {
   "command": "npx",
@@ -78,13 +82,35 @@ claude mcp add brightspace -- npx -y brightspace-mcp-server@latest
 }
 ```
 
+Windows:
+```json
+{
+  "command": "cmd",
+  "args": ["/c", "npx", "-y", "brightspace-mcp-server@latest"]
+}
+```
+
 **Cursor** (`~/.cursor/mcp.json`):
+
+Mac/Linux:
 ```json
 {
   "mcpServers": {
     "brightspace": {
       "command": "npx",
       "args": ["-y", "brightspace-mcp-server@latest"]
+    }
+  }
+}
+```
+
+Windows:
+```json
+{
+  "mcpServers": {
+    "brightspace": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "brightspace-mcp-server@latest"]
     }
   }
 }
