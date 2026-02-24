@@ -5,7 +5,7 @@
  * runs npm install -g) so the next launch picks up the new version.
  */
 
-import { execFile } from "node:child_process";
+import { exec } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -41,7 +41,7 @@ const FALLBACK_MSG = (old: string, latest: string) =>
 export function initUpdateChecker(): void {
   const installed = getInstalledVersion();
 
-  execFile("npm", ["view", "brightspace-mcp-server", "version"], { timeout: 10000, shell: true }, (err, stdout) => {
+  exec("npm view brightspace-mcp-server version", { timeout: 10000 }, (err, stdout) => {
     if (err) return;
     const latest = stdout.trim();
     if (!latest || latest === installed) return;
@@ -58,7 +58,7 @@ export function initUpdateChecker(): void {
           notice = FALLBACK_MSG(installed, latest);
         });
     } else {
-      execFile("npm", ["install", "-g", "brightspace-mcp-server@latest"], { timeout: 60000, shell: true }, (installErr) => {
+      exec("npm install -g brightspace-mcp-server@latest", { timeout: 60000 }, (installErr) => {
         if (installErr) {
           notice = FALLBACK_MSG(installed, latest);
         } else {
