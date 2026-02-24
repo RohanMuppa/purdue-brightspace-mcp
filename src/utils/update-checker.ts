@@ -27,15 +27,23 @@ function getInstalledVersion(): string {
 export function initUpdateChecker(): void {
   const installed = getInstalledVersion();
 
-  execFile("npm", ["view", "brightspace-mcp-server", "version"], { timeout: 10000 }, (err, stdout) => {
+  execFile("npm", ["view", "brightspace-mcp-server", "version"], { timeout: 10000, shell: true }, (err, stdout) => {
     if (err) return;
     const latest = stdout.trim();
     if (!latest) return;
 
     if (latest !== installed) {
-      notice =
-        `Update available: v${installed} → v${latest}. ` +
-        "Run `npx brightspace-mcp-server@latest` or clear your npx cache to update.";
+      execFile("npm", ["install", "-g", "brightspace-mcp-server@latest"], { timeout: 60000, shell: true }, (installErr) => {
+        if (installErr) {
+          notice =
+            `Update available: v${installed} → v${latest}. ` +
+            "Run `npx brightspace-mcp-server@latest` or clear your npx cache to update.";
+        } else {
+          notice =
+            `Auto-updated from v${installed} to v${latest}. ` +
+            "Restart your MCP client to use the new version.";
+        }
+      });
     }
   });
 }

@@ -55,12 +55,12 @@ if (subcommand === 'setup') {
       // Create MCP server instance
       const server = new McpServer({
         name: "brightspace",
-        version: "1.0.9",
+        version: "1.1.0",
         description: "Brightspace MCP Server — by Rohan Muppa (github.com/rohanmuppa/brightspace-mcp-server)",
       });
       log("INFO", "");
       log("INFO", "========================================");
-      log("INFO", "  Brightspace MCP Server v1.0.9");
+      log("INFO", "  Brightspace MCP Server v1.1.0");
       log("INFO", "  By Rohan Muppa — ECE @ Purdue");
       log("INFO", "  github.com/rohanmuppa/brightspace-mcp-server");
       log("INFO", "========================================");
