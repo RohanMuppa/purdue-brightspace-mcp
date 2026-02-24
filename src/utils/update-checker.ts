@@ -1,10 +1,12 @@
 /**
- * Background update checker — non-blocking git fetch on startup.
- * If new commits exist on origin/main, produces a one-time notice
+ * Background npm update checker — non-blocking fetch on startup.
+ * Compares installed version against latest on npm registry.
+ * If a newer version exists, produces a one-time notice
  * that gets appended to the first check_auth response.
  */
 
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -13,23 +15,28 @@ const projectRoot = resolve(dirname(__filename), "..", "..");
 
 let notice: string | null = null;
 
+function getInstalledVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(projectRoot, "package.json"), "utf-8"));
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 export function initUpdateChecker(): void {
-  execFile("git", ["fetch", "origin", "main"], { cwd: projectRoot }, (err) => {
+  const installed = getInstalledVersion();
+
+  execFile("npm", ["view", "brightspace-mcp-server", "version"], { timeout: 10000 }, (err, stdout) => {
     if (err) return;
-    execFile(
-      "git",
-      ["rev-list", "--count", "HEAD..origin/main"],
-      { cwd: projectRoot },
-      (err, stdout) => {
-        if (err) return;
-        const count = parseInt(stdout.trim(), 10);
-        if (count > 0) {
-          notice =
-            `Update available (${count} new commit${count === 1 ? "" : "s"}). ` +
-            "Run `brightspace-update` in your terminal to update.";
-        }
-      }
-    );
+    const latest = stdout.trim();
+    if (!latest) return;
+
+    if (latest !== installed) {
+      notice =
+        `Update available: v${installed} → v${latest}. ` +
+        "Run `npx brightspace-mcp-server@latest` or clear your npx cache to update.";
+    }
   });
 }
 
