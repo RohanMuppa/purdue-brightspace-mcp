@@ -35,7 +35,6 @@ export interface AppConfig {
   headless: boolean;
   username?: string;
   password?: string;
-  totpSecret?: string;
   courseFilter: CourseFilterConfig;
 }
 

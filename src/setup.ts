@@ -335,36 +335,11 @@ async function main(): Promise<void> {
     output: process.stdout,
   });
 
-  // ── Step 4: MFA config ───────────────────────────────────────────
-  let mfaTotpSecret: string | undefined;
-
+  // ── Step 4: MFA info ─────────────────────────────────────────────
   if (preset) {
-    // School preset — we know they use Duo
     console.log(dim(`  MFA: ${preset.mfaNote}`));
-    const totp = await ask(
-      rl2,
-      "Do you have a TOTP secret key? (paste it, or press Enter to use push notifications): ",
-    );
-    if (totp) {
-      mfaTotpSecret = totp;
-      console.log(dim("  → TOTP secret saved. MFA will be handled automatically."));
-    } else {
-      console.log(dim("  → Will use Duo push notifications."));
-    }
   } else {
-    const useMfa = await ask(rl2, "Do you use Duo MFA? (yes/no): ");
-    if (/^y(es)?$/i.test(useMfa)) {
-      const totp = await ask(
-        rl2,
-        "Do you have a TOTP secret key? (paste it, or press Enter to use push notifications): ",
-      );
-      if (totp) {
-        mfaTotpSecret = totp;
-        console.log(dim("  → TOTP secret saved. MFA will be handled automatically."));
-      } else {
-        console.log(dim("  → Will use Duo push notifications."));
-      }
-    }
+    console.log(dim("  MFA: You will be prompted to approve via Duo on your phone during auth."));
   }
   console.log("");
 
@@ -373,7 +348,6 @@ async function main(): Promise<void> {
     baseUrl,
     username,
     password,
-    ...(mfaTotpSecret ? { mfaTotpSecret } : {}),
   };
 
   saveConfigStore(config);

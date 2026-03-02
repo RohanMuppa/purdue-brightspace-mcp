@@ -22,7 +22,6 @@ export class BrowserAuth {
     this.ssoFlow = new PurdueSSOFlow({
       username: config.username,
       password: config.password,
-      totpSecret: config.totpSecret,
     });
   }
 

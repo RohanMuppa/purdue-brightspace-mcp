@@ -13,7 +13,6 @@ export interface ConfigStoreData {
   baseUrl?: string;
   username?: string;
   password?: string;
-  mfaTotpSecret?: string;
   sessionDir?: string;
   tokenTtl?: number;
   headless?: boolean;

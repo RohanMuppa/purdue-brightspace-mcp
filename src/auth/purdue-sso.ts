@@ -5,7 +5,6 @@
  */
 
 import type { Page } from "playwright";
-import * as OTPAuth from "otpauth";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 
@@ -13,17 +12,12 @@ const SELECTORS = {
   usernameInput: "input#username",
   passwordInput: "input#password",
   submitButton: 'button[name="_eventId_proceed"]',
-  otherWayLink: "a#signInAnotherWay",
-  totpOption: 'div[data-value="PhoneAppOTP"]',
-  totpInput: "input#idTxtBx_SAOTCC_OTC",
-  totpVerifyButton: "input[type=submit]",
   staySignedInYes: "input[type=submit][value='Yes']",
 } as const;
 
 interface PurdueSSOConfig {
   username?: string;
   password?: string;
-  totpSecret?: string;
 }
 
 export class PurdueSSOFlow {
@@ -117,71 +111,6 @@ export class PurdueSSOFlow {
   }
 
   private async handleMFA(page: Page): Promise<void> {
-    if (this.config.totpSecret) {
-      await this.handleTOTPAuth(page);
-    } else {
-      await this.handleManualMFAApproval(page);
-    }
-  }
-
-  private async handleTOTPAuth(page: Page): Promise<void> {
-    try {
-      log("INFO", "TOTP secret provided - attempting automated MFA");
-
-      // Check if we need to select "Other way to sign in"
-      try {
-        const otherWayLink = await page.waitForSelector(
-          SELECTORS.otherWayLink,
-          { timeout: 3000 }
-        );
-        if (otherWayLink) {
-          log("DEBUG", "Clicking 'Use another way to sign in'");
-          await otherWayLink.click();
-          await page.waitForLoadState("networkidle");
-
-          // Select TOTP option
-          log("DEBUG", "Selecting TOTP authentication option");
-          const totpOption = await page.waitForSelector(
-            SELECTORS.totpOption,
-            { timeout: 5000 }
-          );
-          await totpOption.click();
-          await page.waitForLoadState("networkidle");
-        }
-      } catch (error) {
-        // TOTP input might already be visible
-        log("DEBUG", "No 'other way' link found - TOTP input may already be visible");
-      }
-
-      // Generate TOTP code
-      const totp = new OTPAuth.TOTP({
-        issuer: "Microsoft",
-        label: this.config.username || "user",
-        algorithm: "SHA1",
-        digits: 6,
-        period: 30,
-        secret: this.config.totpSecret!,
-      });
-      const code = totp.generate();
-      log("INFO", "Generated TOTP code");
-
-      // Enter TOTP code
-      log("DEBUG", "Waiting for TOTP input field");
-      await page.waitForSelector(SELECTORS.totpInput, { timeout: 10000 });
-      await page.fill(SELECTORS.totpInput, code);
-      await page.click(SELECTORS.totpVerifyButton);
-      log("INFO", "Submitted TOTP code");
-      await page.waitForLoadState("networkidle");
-    } catch (error) {
-      throw new BrowserAuthError(
-        "Failed to complete TOTP authentication",
-        "mfa_totp",
-        error as Error
-      );
-    }
-  }
-
-  private async handleManualMFAApproval(page: Page): Promise<void> {
     try {
       log("WARN", "Waiting for Microsoft MFA approval on your device...");
       log("INFO", "Timeout: 120 seconds");
