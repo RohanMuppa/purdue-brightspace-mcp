@@ -10,16 +10,14 @@ import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
 
 const SELECTORS = {
-  emailInput: "input[type=email]",
-  passwordInput: "input[type=password]",
-  submitButton: "input[type=submit]",
-  nextButton: "input[type=submit]",
+  usernameInput: "input#username",
+  passwordInput: "input#password",
+  submitButton: 'button[name="_eventId_proceed"]',
   otherWayLink: "a#signInAnotherWay",
   totpOption: 'div[data-value="PhoneAppOTP"]',
   totpInput: "input#idTxtBx_SAOTCC_OTC",
   totpVerifyButton: "input[type=submit]",
   staySignedInYes: "input[type=submit][value='Yes']",
-  institutionButton: 'button:has-text("Purdue West Lafayette")',
 } as const;
 
 interface PurdueSSOConfig {
@@ -46,22 +44,19 @@ export class PurdueSSOFlow {
     try {
       log("INFO", "Starting Purdue SSO login flow");
 
-      // Step 1: Check for institution selector (may or may not appear)
-      await this.handleInstitutionSelector(page);
+      // Step 1: Handle campus selector on purdue.brightspace.com/d2l/login
+      await this.handleCampusSelector(page);
 
-      // Step 2: Enter email
-      await this.enterEmail(page);
+      // Step 2: Enter username + password on sso.purdue.edu (Shibboleth)
+      await this.enterCredentials(page);
 
-      // Step 3: Enter password
-      await this.enterPassword(page);
-
-      // Step 4: Handle MFA (TOTP automated or manual approval)
+      // Step 3: Handle MFA (TOTP automated or manual approval)
       await this.handleMFA(page);
 
-      // Step 5: Handle "Stay signed in?" prompt
+      // Step 4: Handle "Stay signed in?" prompt
       await this.handleStaySignedIn(page);
 
-      // Step 6: Wait for successful redirect to Brightspace home
+      // Step 5: Wait for successful redirect to Brightspace home
       await page.waitForURL(/\/d2l\/home/, { timeout: 120000 });
       log("INFO", "Login successful - reached Brightspace home");
 
@@ -72,69 +67,50 @@ export class PurdueSSOFlow {
     }
   }
 
-  private async handleInstitutionSelector(page: Page): Promise<void> {
-    try {
-      log("DEBUG", "Checking for institution selector");
-      const institutionButton = await page.waitForSelector(
-        SELECTORS.institutionButton,
-        { timeout: 3000 }
+  private async handleCampusSelector(page: Page): Promise<void> {
+    const currentUrl = page.url();
+    if (currentUrl.includes("/d2l/login")) {
+      // Campus selector buttons are inside a shadow DOM — navigate directly
+      // to Purdue's Shibboleth SAML endpoint instead of clicking them
+      const baseUrl = new URL(currentUrl).origin;
+      log("INFO", "Campus selector detected — navigating directly to Shibboleth IdP");
+      await page.goto(
+        `${baseUrl}/d2l/lp/auth/saml/initiate-login?entityId=https://idp.purdue.edu/idp/shibboleth`,
+        { waitUntil: "networkidle", timeout: 30000 }
       );
-      if (institutionButton) {
-        log("INFO", "Institution selector found - clicking Purdue West Lafayette");
-        await institutionButton.click();
-        await page.waitForLoadState("networkidle");
-      }
-    } catch (error) {
-      // Institution selector may not appear - this is normal
-      log("DEBUG", "No institution selector found (timeout expected if already logged in)");
     }
+    // Already on sso.purdue.edu or past the campus selector — nothing to do
   }
 
-  private async enterEmail(page: Page): Promise<void> {
+  private async enterCredentials(page: Page): Promise<void> {
     try {
-      log("DEBUG", "Waiting for email input");
-      await page.waitForSelector(SELECTORS.emailInput, { timeout: 30000 });
+      log("DEBUG", "Waiting for Shibboleth login form");
+      await page.waitForSelector(SELECTORS.usernameInput, { timeout: 30000 });
 
       if (!this.config.username) {
         throw new BrowserAuthError(
           "Username is required for SSO login",
-          "email_entry"
+          "credentials"
         );
       }
-
-      log("INFO", "Entering email");
-      await page.fill(SELECTORS.emailInput, this.config.username);
-      await page.click(SELECTORS.nextButton);
-      await page.waitForLoadState("networkidle");
-    } catch (error) {
-      throw new BrowserAuthError(
-        "Failed to enter email",
-        "email_entry",
-        error as Error
-      );
-    }
-  }
-
-  private async enterPassword(page: Page): Promise<void> {
-    try {
-      log("DEBUG", "Waiting for password input");
-      await page.waitForSelector(SELECTORS.passwordInput, { timeout: 30000 });
 
       if (!this.config.password) {
         throw new BrowserAuthError(
           "Password is required for SSO login",
-          "password_entry"
+          "credentials"
         );
       }
 
-      log("INFO", "Entering password");
+      log("INFO", "Entering credentials");
+      await page.fill(SELECTORS.usernameInput, this.config.username);
       await page.fill(SELECTORS.passwordInput, this.config.password);
       await page.click(SELECTORS.submitButton);
       await page.waitForLoadState("networkidle");
     } catch (error) {
+      if (error instanceof BrowserAuthError) throw error;
       throw new BrowserAuthError(
-        "Failed to enter password",
-        "password_entry",
+        "Failed to enter credentials",
+        "credentials",
         error as Error
       );
     }

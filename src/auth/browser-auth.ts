@@ -355,15 +355,11 @@ export class BrowserAuth {
       const currentUrl = page.url();
       log("DEBUG", `Current URL after navigation: ${currentUrl}`);
 
-      // If we see the email input, we need to login
-      const emailInput = await page
-        .locator("input[type=email]")
-        .first()
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
+      // If we were redirected away from /d2l/home, login is required
+      const needsLogin = !currentUrl.includes("/d2l/home");
 
-      if (emailInput) {
-        log("INFO", "Login page detected - starting SSO flow");
+      if (needsLogin) {
+        log("INFO", `Login required (redirected to ${currentUrl}) - starting SSO flow`);
         const loginSuccess = await this.ssoFlow.login(page);
 
         if (!loginSuccess) {
