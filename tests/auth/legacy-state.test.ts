@@ -40,6 +40,17 @@ describe("original-root legacy migration", () => {
     expect(await migrateLegacyState(root)).toEqual({ tokenState: "encrypted", browserState: "encrypted" });
   });
 
+  it("validates fully migrated state without taking the authentication lock", async () => {
+    await new SessionStore(root, { backend }).save(testToken);
+    await new BrowserStateStore(root, { backend }).save(testBrowserState);
+    const release = await acquireProcessLock(path.join(root, ".auth.lock"));
+    try {
+      expect(await migrateLegacyState(root)).toEqual({ tokenState: "encrypted", browserState: "encrypted" });
+    } finally {
+      await release();
+    }
+  });
+
   it("does nothing when no exact legacy state file exists", async () => {
     await fs.mkdir(path.join(root, "browser-data"));
     await fs.writeFile(path.join(root, "storage-state.json.backup"), "untouched");

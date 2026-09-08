@@ -43,11 +43,42 @@ async function migrate(label: string, operation: () => Promise<unknown>): Promis
   }
 }
 
+async function isV2Session(root: string): Promise<boolean> {
+  try {
+    return JSON.parse(await fs.readFile(path.join(root, "session.json"), "utf8")).version === 2;
+  } catch {
+    return false;
+  }
+}
+
 /** Secure v1 state in its original directory without assigning it to a new identity. */
 export async function migrateLegacyState(sessionRoot: string): Promise<LegacyMigrationResult> {
   const names = ["session.json", "storage-state.json", "storage-state.encrypted.json"];
   const kinds = await Promise.all(names.map((name) => fileKind(sessionRoot, name)));
   if (kinds.every((kind) => kind === "absent")) return { tokenState: "absent", browserState: "absent" };
+
+  const [token, plainBrowser, encryptedBrowser] = kinds;
+  const tokenAlreadyV2 = token === "regular" && await isV2Session(sessionRoot);
+  // Once migration is complete, validation is read-only and must not make
+  // concurrent MCP startups contend on the authentication lock.
+  if ((token === "absent" || token === "unsafe" || tokenAlreadyV2) && plainBrowser === "absent") {
+    let tokenState: StateDisposition = "absent";
+    if (token === "unsafe") {
+      reportPreserved("token state");
+      tokenState = "preserved";
+    } else if (tokenAlreadyV2) {
+      tokenState = await migrate("token state", () => new SessionStore(sessionRoot).load());
+    }
+
+    let browserState: StateDisposition = "absent";
+    if (encryptedBrowser === "unsafe") {
+      reportPreserved("browser state");
+      browserState = "preserved";
+    } else if (encryptedBrowser === "regular") {
+      browserState = await migrate("browser state", () => new BrowserStateStore(sessionRoot).load());
+    }
+    return { tokenState, browserState };
+  }
 
   const release = await acquireProcessLock(path.join(sessionRoot, ".auth.lock"));
   try {
