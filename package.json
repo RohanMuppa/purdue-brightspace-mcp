@@ -1,6 +1,6 @@
 {
   "name": "brightspace-mcp-server",
-  "version": "1.6.3",
+  "version": "2.0.0",
   "mcpName": "io.github.rohanmuppa/brightspace",
   "description": "MCP server for Brightspace (D2L). Check grades, due dates, assignments, announcements, syllabus, rosters and more via Claude, ChatGPT, Cursor, Windsurf, or any MCP client.",
   "type": "module",
@@ -28,11 +28,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "@napi-rs/keyring": "^2.0.0",
     "ajv": "^8.18.0",
     "dotenv": "^17.2.4",
     "file-type": "^21.3.0",
     "playwright": "^1.58.2",
     "sanitize-filename": "^1.6.3",
+    "trash": "^10.1.1",
     "turndown": "^7.2.2",
     "unpdf": "^1.4.0",
     "zod": "^4.0.0"
@@ -45,7 +47,7 @@
     "vitest": "^4.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "license": "MIT",
   "author": "Rohan Muppa",

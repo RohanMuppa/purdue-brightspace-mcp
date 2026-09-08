@@ -12,7 +12,7 @@ import { log } from "../utils/logger.js";
  * carrying a script that redirects to /d2l/login?sessionExpired=1. There is no
  * 401 on this path, so the marker, not the status, is the only honest signal.
  */
-const EXPIRED_MARKER = "sessionExpired=1";
+const EXPIRED_MARKER = "/d2l/login?sessionExpired=1";
 
 /** Same identity the API client sends, see buildAuthHeaders in api/client.ts. */
 const USER_AGENT =
@@ -41,12 +41,23 @@ const transport = (detail: string): MintResult => ({
   detail,
 });
 
+function expiredRedirect(location: string | null, tokenUrl: string): boolean {
+  if (!location) return false;
+  try {
+    const target = new URL(location, tokenUrl);
+    return target.origin === new URL(tokenUrl).origin &&
+      target.pathname === "/d2l/login" && target.searchParams.get("sessionExpired") === "1";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Exchange the D2L session cookies for a fresh Bearer token in one request.
  * This is the cheap alternative to relaunching Chromium when the JWT expires.
  *
- * Classification order matters: a network throw is transport, the expiry marker
- * wins over the status code, then a non-2xx status, then a missing access_token.
+ * Only a 401 or the known login redirect proves session expiry. Server errors,
+ * permission failures and unknown response formats remain temporary failures.
  */
 export async function mintAccessToken({
   baseUrl,
@@ -59,6 +70,7 @@ export async function mintAccessToken({
 
   let status: number;
   let body: string;
+  let location: string | null;
   try {
     const response = await fetchImpl(url, {
       method: "POST",
@@ -70,15 +82,27 @@ export async function mintAccessToken({
       },
       body: "scope=*:*:*",
       signal: AbortSignal.timeout(timeoutMs),
+      redirect: "manual",
     });
     status = response.status;
     body = await response.text();
+    location = response.headers?.get("location") ?? null;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return transport(message);
   }
 
-  if (body.includes(EXPIRED_MARKER)) {
+  if (status >= 500 || status === 429) return transport(`HTTP ${status}`);
+
+  let payload: { access_token?: unknown } | null = null;
+  try {
+    payload = JSON.parse(body) as { access_token?: unknown } | null;
+  } catch {
+    // The known expired-session response is an HTML login redirect.
+  }
+
+  if (status === 401 || (!payload && body.includes(EXPIRED_MARKER)) ||
+      expiredRedirect(location, url)) {
     log("DEBUG", "The token mint answered with the session-expired stub");
     return { ok: false, reason: "sessionExpired" };
   }
@@ -87,12 +111,11 @@ export async function mintAccessToken({
     return transport(`HTTP ${status}`);
   }
 
-  let accessToken: unknown;
-  try {
-    accessToken = (JSON.parse(body) as { access_token?: unknown }).access_token;
-  } catch {
+  if (!payload) {
     return transport("the token mint returned an unparseable body");
   }
+
+  const accessToken = payload.access_token;
 
   if (typeof accessToken !== "string" || accessToken.length === 0) {
     return transport("the token mint returned no access_token");

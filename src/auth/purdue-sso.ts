@@ -1,26 +1,19 @@
 /**
  * Purdue Brightspace MCP Server
  * Copyright (c) 2026 Rohan Muppa. All rights reserved.
- * Licensed under MIT — see LICENSE file for details.
+ * Licensed under MIT : see LICENSE file for details.
  */
 
-import type { ElementHandle, Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { BrowserAuthError } from "../utils/errors.js";
 import { log } from "../utils/logger.js";
+import { MfaApprovalError, UnsupportedAuthenticationError } from "./sso-flow.js";
 
-const SELECTORS = {
-  usernameInput: "input#username",
-  passwordInput: "input#password",
-  submitButton: 'button[name="_eventId_proceed"]',
-  staySignedInYes: "input[type=submit][value='Yes']",
-  // Purdue's proceed button, D2L's own, and the generic submit used by Entra
-  // (input#idSIButton9) and most other identity providers.
-  formSubmit: 'button[name="_eventId_proceed"], button.d2l-button, input[type="submit"]',
-} as const;
-
-// Entra labels the account-name button "Next" and only shows "Sign in" on the
-// view that follows. Both are input#idSIButton9, so the label tells them apart.
-const ACCOUNT_NAME_BUTTON = /^next$/i;
+const EMAIL_SELECTORS = ["input[type=email]", "input[name=loginfmt]"];
+const PASSWORD_SELECTORS = ["input[type=password]", "input[name=passwd]"];
+const SUBMIT_SELECTORS = ["#idSIButton9", "input[type=submit]", "button[type=submit]"];
+const FIELD_TIMEOUT_MS = 30_000;
+const FIELD_POLL_MS = 250;
 
 /**
  * Entra's number-match digits. The tenant shows a two-digit number that has to
@@ -36,18 +29,16 @@ const NUMBER_MATCH_POLL_MS = 2000;
 /** A person has to find their phone, unlock it, and read a prompt. */
 const MFA_TIMEOUT_MS = 5 * 60 * 1000;
 
-/** Visible text of a button, or the value of a submit input. */
-async function controlLabel(
-  handle: ElementHandle<SVGElement | HTMLElement>
-): Promise<string> {
-  return handle.evaluate((el) =>
-    ((el as HTMLInputElement).value || el.textContent || "").trim()
-  );
-}
-
 interface PurdueSSOConfig {
   username?: string;
   password?: string;
+  baseUrl?: string;
+}
+
+/** Microsoft expects Purdue's full sign-in name, while setup also accepts a career account. */
+function signInName(username: string, baseUrl?: string): string {
+  const isPurdue = baseUrl && new URL(baseUrl).hostname.toLowerCase() === "purdue.brightspace.com";
+  return isPurdue && !username.includes("@") ? `${username}@purdue.edu` : username;
 }
 
 export class PurdueSSOFlow {
@@ -64,12 +55,16 @@ export class PurdueSSOFlow {
     return Boolean(this.config.username && this.config.password);
   }
 
+  async prepareLogin(page: Page): Promise<void> {
+    await this.handleCampusSelector(page);
+  }
+
   /**
    * Execute the complete Microsoft Entra ID SSO login flow for Purdue.
-   * Handles institution selector, email/password entry, MFA (TOTP or manual), and "stay signed in" prompt.
+   * Handles the school selector, saved credentials, device MFA approval, and stay-signed-in.
    *
    * @param page - Playwright page instance (already navigated to Brightspace or redirected to login)
-   * @returns true on successful login (URL contains /d2l/home), false on timeout/failure
+   * @returns true after reaching Brightspace home; failures are typed errors
    */
   async login(page: Page): Promise<boolean> {
     try {
@@ -78,231 +73,157 @@ export class PurdueSSOFlow {
       // Step 1: Handle campus selector on purdue.brightspace.com/d2l/login
       await this.handleCampusSelector(page);
 
-      // Step 2: Enter username + password on sso.purdue.edu (Shibboleth)
-      await this.enterCredentials(page);
+      // Restored Microsoft state can lead directly to MFA or stay-signed-in.
+      const postCredential = await page.locator(
+        `${NUMBER_MATCH_SELECTOR}, #idDiv_SAOTCAS_Title, #idDiv_SAOTCC_Title, #KmsiCheckboxField`
+      ).first().isVisible().catch(() => false);
+      const kmsi = await page.getByText("Stay signed in?").first().isVisible().catch(() => false);
+      if (!page.url().includes("/d2l/home") && !postCredential && !kmsi) await this.enterCredentials(page);
 
-      // Step 3: Handle MFA (TOTP automated or manual approval)
+      // Wait for device approval and print Microsoft's number match.
       await this.handleMFA(page);
 
-      // Step 4: Handle "Stay signed in?" prompt
-      await this.handleStaySignedIn(page);
-
-      // Step 5: Wait for successful redirect to Brightspace home
-      await page.waitForURL(/\/d2l\/home/, { timeout: 120000 });
-      log("INFO", "Login successful - reached Brightspace home");
-
       return true;
     } catch (error) {
-      log("ERROR", "SSO login flow failed", error);
-      return false;
-    }
-  }
-
-  /**
-   * Manual login fallback: let the user type credentials and complete MFA themselves.
-   * The browser stays open in headed mode while we wait for /d2l/home.
-   */
-  async manualLogin(page: Page): Promise<boolean> {
-    try {
-      log("INFO", "Starting manual login flow (no saved credentials)");
-      log("INFO", "Please log in using the browser window that just opened.");
-
-      // Navigate past the campus selector so the user lands on the Shibboleth form
-      await this.handleCampusSelector(page);
-
-      // Wait up to 5 minutes for the user to complete login manually
-      log("INFO", "Waiting up to 5 minutes for you to complete login and MFA...");
-      await page.waitForURL(/\/d2l\/home/, { timeout: 300000 });
-      log("INFO", "Manual login successful - reached Brightspace home");
-
-      return true;
-    } catch (error) {
-      log("ERROR", "Manual login flow failed or timed out", error);
-      return false;
+      if (error instanceof BrowserAuthError) throw error;
+      throw new UnsupportedAuthenticationError("The identity provider could not complete headless sign-in. Check saved credentials and supported MFA settings.", error as Error);
     }
   }
 
   private async handleCampusSelector(page: Page): Promise<void> {
     const currentUrl = page.url();
     if (currentUrl.includes("purdue.brightspace.com") && currentUrl.includes("/d2l/login")) {
-      // Campus selector buttons are inside a shadow DOM — navigate directly
-      // to Purdue's Shibboleth SAML endpoint instead of clicking them
+      // Follow the live Purdue control first, as Brightspace Bar does, so a
+      // tenant-side destination change does not leave this client behind.
+      const campus = page.getByText(/Purdue West Lafayette/i).first();
+      if (await campus.isVisible().catch(() => false)) {
+        log("INFO", "Campus selector detected : selecting Purdue West Lafayette");
+        await campus.click();
+        return;
+      }
+
+      // Retain the known endpoint as a fallback if the control has not rendered.
       const baseUrl = new URL(currentUrl).origin;
-      log("INFO", "Campus selector detected — navigating directly to Shibboleth IdP");
+      log("INFO", "Campus selector detected : navigating directly to Shibboleth IdP");
       await page.goto(
         `${baseUrl}/d2l/lp/auth/saml/initiate-login?entityId=https://idp.purdue.edu/idp/shibboleth`,
-        { waitUntil: "networkidle", timeout: 30000 }
+        { waitUntil: "domcontentloaded", timeout: 30000 }
       );
     }
-    // Already on sso.purdue.edu or past the campus selector — nothing to do
+    // Already on sso.purdue.edu or past the campus selector : nothing to do
   }
 
   private async enterCredentials(page: Page): Promise<void> {
-    try {
-      log("DEBUG", "Waiting for login form");
-      
-      // Wait for either Purdue's username or Albany's userName (or typical email fields)
-      // Use a shorter timeout so it falls back to manual login quickly if unrecognized
-      const usernameSelector = 'input#username, input#userName, input[type="email"]';
-      await page.waitForSelector(usernameSelector, { timeout: 10000 });
+    if (!this.config.username) throw new BrowserAuthError("Username is required for SSO login", "credentials");
+    if (!this.config.password) throw new BrowserAuthError("Password is required for SSO login", "credentials");
 
-      if (!this.config.username) {
-        throw new BrowserAuthError(
-          "Username is required for SSO login",
-          "credentials"
-        );
-      }
-
-      if (!this.config.password) {
-        throw new BrowserAuthError(
-          "Password is required for SSO login",
-          "credentials"
-        );
-      }
-
-      log("INFO", "Entering credentials");
-      const usernameField = await this.findVisible(page, usernameSelector);
-      if (usernameField) {
-        await usernameField.fill(this.config.username);
-      }
-
-      // Microsoft Entra puts a password box on its account-name page as well,
-      // but the button there only advances to the next view. Submit the account
-      // name first so the password lands on the page that actually signs in.
-      await this.submitAccountName(page);
-
-      const passwordSelector = 'input#password, input[type="password"]';
-      const passwordField = await this.findVisible(page, passwordSelector);
-      if (passwordField) {
-        await passwordField.fill(this.config.password);
-      }
-
-      const submitButton = await this.findVisible(page, SELECTORS.formSubmit);
-      if (submitButton) {
-        await submitButton.click();
-      } else {
-        // Fallback: just hit Enter on the password field
-        await passwordField?.press('Enter');
-      }
-
-      await page.waitForLoadState("networkidle");
-    } catch (error) {
-      log("WARN", "Automated credentials entry failed, will fallback to manual login.", error);
-      throw error;
+    log("INFO", "Entering credentials");
+    const email = signInName(this.config.username, this.config.baseUrl);
+    if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) {
+      throw new UnsupportedAuthenticationError("The Microsoft email field did not appear. Headless sign-in cannot continue.");
+    }
+    if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
+      throw new UnsupportedAuthenticationError("The Microsoft email submit button did not appear. Headless sign-in cannot continue.");
+    }
+    if (!await this.fillWhenReady(page, PASSWORD_SELECTORS, this.config.password)) {
+      throw new UnsupportedAuthenticationError("The Microsoft password field did not appear. Headless sign-in cannot continue.");
+    }
+    if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
+      throw new UnsupportedAuthenticationError("The Microsoft password submit button did not appear. Headless sign-in cannot continue.");
     }
   }
 
-  /**
-   * Resolve a control only when it is actually on screen.
-   *
-   * Entra is a single-page app: the account-name view stays in the DOM once
-   * the password view replaces it, so a plain page.$() returns the hidden
-   * first-page input or button that precedes the live one in document order.
-   * Filling or clicking those stalls on Playwright's actionability wait.
-   */
-  private async findVisible(
-    page: Page,
-    selector: string
-  ): Promise<ElementHandle<SVGElement | HTMLElement> | null> {
-    for (const handle of await page.$$(selector)) {
-      if (await handle.isVisible()) return handle;
-    }
-    return null;
+  /** Ported from Brightspace Bar's proven four-step Entra choreography. */
+  private async actWhenReady(page: Page, selectors: string[], act: (target: Locator) => Promise<void>): Promise<boolean> {
+    const deadline = Date.now() + FIELD_TIMEOUT_MS;
+    do {
+      for (const selector of selectors) {
+        const target = page.locator(selector).first();
+        if (await target.isVisible().catch(() => false)) {
+          await act(target);
+          return true;
+        }
+      }
+      await page.waitForTimeout(FIELD_POLL_MS);
+    } while (Date.now() < deadline);
+    return false;
   }
 
-  /**
-   * Advance Microsoft Entra's account-name page.
-   *
-   * That page carries a password box of its own, and Playwright reports it as
-   * visible, so presence cannot tell it apart from a single-page form. The
-   * button label can: it reads "Next" there and "Sign in" on the view that
-   * follows. Filling the password against the account-name page leaves the
-   * browser parked with both fields populated and nothing submitted.
-   */
-  private async submitAccountName(page: Page): Promise<void> {
-    const submit = await this.findVisible(page, SELECTORS.formSubmit);
-    if (!submit) return;
-    if (!ACCOUNT_NAME_BUTTON.test(await controlLabel(submit))) return;
-
-    log("INFO", "Account-name page detected — submitting account name");
-    await submit.click();
-
-    // The sign-in view has arrived once the button stops saying "Next".
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      await page.waitForTimeout(500);
-      const current = await this.findVisible(page, SELECTORS.formSubmit);
-      if (current && !ACCOUNT_NAME_BUTTON.test(await controlLabel(current))) return;
-    }
-    log("WARN", "Sign-in page did not appear after submitting the account name");
+  private async fillWhenReady(page: Page, selectors: string[], value: string): Promise<boolean> {
+    return this.actWhenReady(page, selectors, target => target.fill(value));
   }
 
+  private async clickWhenReady(page: Page, selectors: string[]): Promise<boolean> {
+    // Entra often detaches the button after the click has already navigated.
+    return this.actWhenReady(page, selectors, target => target.click().catch(() => {}));
+  }
+
+  /** Brightspace Bar's bounded number/auth/KMSI polling loop. */
   private async handleMFA(page: Page): Promise<void> {
-    // The number is only on screen while MFA is pending, so the scrape has to
-    // run alongside the wait rather than before or after it.
-    const pending = { done: false };
-    let release: () => void = () => {};
-    const released = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const watcher = this.watchNumberMatch(page, pending, released);
-
+    if (!this.config.baseUrl) {
+      throw new UnsupportedAuthenticationError("A school URL is required to verify headless authentication.");
+    }
+    const deadline = Date.now() + MFA_TIMEOUT_MS;
+    let challenged = false;
+    let announced: string | null = null;
     try {
-      log("WARN", "Waiting for Microsoft MFA approval on your device...");
-      log("INFO", "Timeout: 5 minutes");
-      log("INFO", "Approve the sign-in request in Microsoft Authenticator. If it shows a number, it is printed below.");
-
-      // Wait for MFA approval by watching for the post-MFA redirect.
-      // Using waitForURL instead of networkidle because networkidle fires
-      // after 500ms of no network activity, which can happen while the MFA
-      // page UI finishes loading but before the user approves the request.
-      await page.waitForURL(
-        (url) => {
-          const href = url.toString();
-          return href.includes("/d2l/") ||
-                 href.includes("kmsi") ||
-                 href.includes("/sso/") ||
-                 href.includes("SAMLResponse");
-        },
-        { timeout: MFA_TIMEOUT_MS }
-      );
-      log("INFO", `MFA completed - redirected to: ${page.url()}`);
+      while (Date.now() < deadline) {
+        const number = await this.readNumberMatch(page);
+        const challengeVisible = number !== null ||
+          await page.locator("#idDiv_SAOTCAS_Title").first().isVisible().catch(() => false) ||
+          await page.locator("#idDiv_SAOTCC_Title").first().isVisible().catch(() => false);
+        if (challengeVisible && !challenged) {
+          challenged = true;
+          log("WARN", "Waiting up to 5 minutes for Microsoft MFA approval on your device.");
+        }
+        if (number && number !== announced) {
+          announced = number;
+          log("WARN", `Number match: ${number}. Enter it in Microsoft Authenticator.`);
+        }
+        if (await this.isAuthenticated(page)) {
+          log("INFO", "Login successful - verified Brightspace home");
+          return;
+        }
+        await this.clickProvenKmsi(page);
+        await page.waitForTimeout(NUMBER_MATCH_POLL_MS);
+      }
     } catch (error) {
-      throw new BrowserAuthError(
-        "MFA approval timed out after 5 minutes",
-        "mfa_approval",
-        error as Error
-      );
-    } finally {
-      pending.done = true;
-      release();
-      await watcher;
+      if (challenged) throw new MfaApprovalError(error as Error);
+      throw new UnsupportedAuthenticationError("Headless sign-in stopped before a supported MFA challenge completed.", error as Error);
+    }
+    if (challenged) throw new MfaApprovalError();
+    throw new UnsupportedAuthenticationError("Sign-in did not reach a supported MFA challenge or Brightspace within 5 minutes.");
+  }
+
+  /** The login shell also exposes D2L.LP, so verify origin and home as well. */
+  private async isAuthenticated(page: Page): Promise<boolean> {
+    try {
+      const expected = new URL(this.config.baseUrl!);
+      const current = new URL(page.url());
+      if (current.origin !== expected.origin || !/^\/d2l\/home(?:\/|$)/.test(current.pathname)) return false;
+      const cookies = await page.context().cookies(expected.origin);
+      if (!cookies.some(cookie => cookie.name === "d2lSessionVal" && Boolean(cookie.value))) return false;
+      return await page.evaluate(() => {
+        const d2l = (window as unknown as Record<string, unknown>).D2L as Record<string, unknown> | undefined;
+        return Boolean(d2l?.LP);
+      });
+    } catch {
+      // Redirects can replace the execution context. Keep polling; this
+      // verdict never causes credentials to be entered a second time.
+      return false;
     }
   }
 
-  /**
-   * Log Entra's number-match digits until the MFA wait is over.
-   *
-   * Only a CHANGED value is logged: Entra re-mints the number whenever the
-   * user asks for a new request, and repeating the same digits every two
-   * seconds would bury everything else in the log.
-   */
-  private async watchNumberMatch(
-    page: Page,
-    pending: { done: boolean },
-    released: Promise<void>
-  ): Promise<void> {
-    let last: string | null = null;
-    while (!pending.done) {
-      const number = await this.readNumberMatch(page);
-      if (number && number !== last) {
-        last = number;
-        log("WARN", `Number match: ${number}. Enter it in Microsoft Authenticator.`);
-      }
-      // Racing the release keeps the wait from outliving the MFA it watches.
-      await Promise.race([
-        page.waitForTimeout(NUMBER_MATCH_POLL_MS).catch(() => {}),
-        released,
-      ]);
+  private async clickProvenKmsi(page: Page): Promise<void> {
+    if (new URL(page.url()).hostname !== "login.microsoftonline.com") return;
+    const proven =
+      await page.locator("#KmsiCheckboxField").first().isVisible().catch(() => false) ||
+      await page.getByText("Stay signed in?").first().isVisible().catch(() => false);
+    if (!proven) return;
+    const yes = page.locator("#idSIButton9").first();
+    if (await yes.isVisible().catch(() => false)) {
+      await yes.click().catch(() => {});
+      log("DEBUG", 'Clicked Yes on "Stay signed in?"');
     }
   }
 
@@ -313,24 +234,8 @@ export class PurdueSSOFlow {
     // runs that never show a number keep the poll on its two-second rhythm.
     if (!(await sign.isVisible().catch(() => false))) return null;
     const text = await sign.textContent().catch(() => null);
-    return text?.trim() || null;
+    const number = text?.trim();
+    return number && /^\d{1,3}$/.test(number) ? number : null;
   }
 
-  private async handleStaySignedIn(page: Page): Promise<void> {
-    try {
-      log("DEBUG", "Checking for 'Stay signed in?' prompt");
-      const staySignedInButton = await page.waitForSelector(
-        SELECTORS.staySignedInYes,
-        { timeout: 10000 }
-      );
-      if (staySignedInButton) {
-        log("INFO", "Clicking 'Yes' on 'Stay signed in?' prompt");
-        await staySignedInButton.click();
-        await page.waitForLoadState("networkidle");
-      }
-    } catch (error) {
-      // Prompt may not appear - this is normal
-      log("DEBUG", "No 'Stay signed in?' prompt found (this is normal)");
-    }
-  }
 }

@@ -16,13 +16,13 @@ Distributed on npm as `brightspace-mcp-server`. Users run it via `npx`, so they 
 
 Follow these steps in order. Stop and report back if any step fails.
 
-### 1. Verify Node.js 18+
+### 1. Verify Node.js 20+ and native secure storage
 
 ```bash
 node --version
 ```
 
-If Node is missing or below v18, tell the user to install the LTS from https://nodejs.org/ and stop.
+If Node is missing or below v20, tell the user to install the LTS from https://nodejs.org/ and stop. Require macOS Keychain, Windows Credential Manager, or an unlocked Linux Secret Service with `secret-tool` (`libsecret-tools` on Debian/Ubuntu). Linux uses libsecret directly; secrets pass through stdin, and temporary kernel-key storage is never used. v2 has no plaintext credential fallback.
 
 ### 2. Run the setup wizard
 
@@ -44,10 +44,11 @@ npx brightspace-mcp-server setup --suny
 ```
 
 The wizard:
+
 - prompts for the school's Brightspace URL (skipped with `--purdue` or `--suny`)
-- launches a Playwright Chromium browser for login and MFA (Microsoft Authenticator number match at Purdue, Duo or a campus app elsewhere)
-- saves credentials to `~/.brightspace-mcp/config.json` (0600)
-- writes the encrypted session to `~/.d2l-session/session.json` (AES-256-GCM)
+- runs a headless Chromium login and prints Microsoft Authenticator number matches in the terminal
+- saves the password in the native credential store and public settings in `~/.brightspace-mcp/config.json` (0600)
+- writes the encrypted session below `~/.d2l-session/accounts/<account-hash>/` (AES-256-GCM)
 - auto-configures Claude Desktop and Cursor if detected
 
 Wait for the user to finish login and MFA before continuing.
@@ -70,7 +71,7 @@ Tell the user to fully quit and reopen their AI client so it picks up the new MC
 
 ## Re-auth
 
-Access tokens are re-minted from the stored session cookie without a browser. When the D2L session itself has expired the server re-launches the browser login. If that fails (missed MFA approval, expired cookies, stale browser locks), run:
+Access tokens are re-minted from the stored session cookie without a browser. A headless browser restores encrypted state for silent SSO when required, then enters saved credentials if Microsoft needs a full login. Missed MFA pauses automatic browser authentication, including SSO redirects, for four hours to prevent repeated phone prompts. HTTP token renewal remains allowed; the explicit command below bypasses the browser cooldown. Forward the MFA number to the user as it appears and wait for phone approval. Clients may hide server logs, so a terminal is the reliable place to see the number. Network errors and locked native storage should be reported without retrying MFA.
 
 ```bash
 npx brightspace-mcp-server auth
@@ -126,7 +127,11 @@ src/
     sso-flow.ts             Picks the login flow for the configured host
     purdue-sso.ts           Default SSO handler (Shibboleth, CAS, Entra forms)
     suny-sso.ts             SUNY campus selection
-    session-store.ts        AES-256-GCM session persistence
+    session-store.ts        AES-256-GCM token persistence and v1 migration
+    browser-state-store.ts  Encrypted cookie and browser storage persistence
+    credential-store.ts     Native password and encryption-key storage
+    auth-lock.ts            Process-shared authentication and write locks
+    auth-cooldown.ts        Failed-MFA automatic retry policy
     token-manager.ts        Token refresh and validation
   utils/
     config-store.ts         ~/.brightspace-mcp/config.json reader/writer
@@ -160,11 +165,12 @@ src/
 
 | Path | Contents | Permissions |
 |------|----------|-------------|
-| `~/.brightspace-mcp/config.json` | School URL, username, password (plaintext, relies on file permissions) | 0600 |
-| `~/.d2l-session/session.json` | Encrypted access token, session cookies, and XSRF token (AES-256-GCM) | 0600 |
-| `~/.d2l-session/browser-data/` | Persistent Chromium profile holding the Microsoft Entra cookie | 0700 |
+| `~/.brightspace-mcp/config.json` | School URL, username, and public settings | 0600 |
+| `~/.d2l-session/accounts/<account-hash>/session.json` | Encrypted access token, session cookies, and XSRF token (AES-256-GCM) | 0600 |
+| `~/.d2l-session/accounts/<account-hash>/storage-state.encrypted.json` | Encrypted cookies and browser storage | 0600 |
+| Native operating-system credential store | Password and random encryption key | OS access controls |
 
-`.env` fallback is supported for CI and dev, but the config store takes precedence.
+Environment values override stored configuration. An environment password is native-store input; the application does not rewrite the user's `.env` or client configuration. Account hashes bind saved state to school and username. Legacy unnamed state stays in the session root and is not replayed for a newly configured account. On upgrade, v1 secrets migrate only after verified secure writes. Retired v1 browser data may remain recoverable in Trash.
 
 ## Adding a school
 
@@ -179,6 +185,6 @@ Add a preset to `SCHOOL_PRESETS` in `src/setup.ts`. If the school uses a non-sta
 
 ## Release workflow
 
-Publishing is automated by GitHub Actions on push to `main` when `version` in `package.json` changes.
+Publishing is automated by GitHub Actions on push to `main` when `version` in `package.json` changes, after the reusable CI matrix passes on macOS, Windows, and Linux. Keep `package.json`, the lockfile, and `server.json` versions aligned. Create the GitHub release only from the verified published commit.
 
 Always bump `version` in `package.json` in the same commit as any code or docs change. The Action skips publish if the version is unchanged, which means users will not receive the update via `npx ...@latest`.

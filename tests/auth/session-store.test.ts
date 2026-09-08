@@ -1,166 +1,127 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { SessionStore } from "../../src/auth/session-store.js";
-import type { TokenData } from "../../src/types/index.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { SessionStore } from "../../src/auth/session-store.js";
+import { NativeCredentialStoreError } from "../../src/auth/credential-store.js";
+import { MemoryCredentialBackend, retireTestFile, testToken, writeLegacySession } from "./secure-store-fixtures.js";
 
 describe("SessionStore", () => {
-  let testDir: string;
-  let sessionStore: SessionStore;
-
+  let dir: string;
+  let backend: MemoryCredentialBackend;
+  let store: SessionStore;
   beforeEach(async () => {
-    // Create isolated temp directory for each test
-    testDir = path.join(
-      os.tmpdir(),
-      `session-store-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    );
-    sessionStore = new SessionStore(testDir);
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "secure-session-test-"));
+    backend = new MemoryCredentialBackend();
+    store = new SessionStore(dir, { backend, trash: retireTestFile });
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it("persists tokens only as authenticated ciphertext and survives a new store instance", async () => {
+    await store.save(testToken);
+    expect(await new SessionStore(dir, { backend }).load()).toEqual(testToken);
+    const contents = await fs.readFile(path.join(dir, "session.json"), "utf8");
+    expect(JSON.parse(contents).version).toBe(2);
+    expect(contents).not.toContain(testToken.accessToken);
+    expect(contents).not.toContain(testToken.cookieHeader);
+    expect(contents).not.toContain(testToken.csrfToken);
+    if (process.platform !== "win32") expect((await fs.stat(path.join(dir, "session.json"))).mode & 0o777).toBe(0o600);
+    await expect(fs.access(path.join(dir, "salt"))).rejects.toThrow();
   });
 
-  afterEach(async () => {
-    // Clean up test directory
-    try {
-      await fs.rm(testDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+  it("returns null only for an absent session", async () => {
+    expect(await store.load()).toBeNull();
+    expect(backend.writes).toBe(0);
   });
 
-  describe("encrypt/decrypt", () => {
-    it("encrypt then decrypt returns original plaintext", () => {
-      const plaintext = JSON.stringify({
-        accessToken: "test-token-12345",
-        capturedAt: Date.now(),
-        expiresAt: Date.now() + 3600000,
-        source: "browser",
-      });
-
-      // Access private methods via any cast for testing
-      const store = sessionStore as any;
-      const encrypted = store.encrypt(plaintext);
-      const decrypted = store.decrypt(encrypted);
-
-      expect(decrypted).toBe(plaintext);
-      expect(encrypted.iv).toBeTruthy();
-      expect(encrypted.authTag).toBeTruthy();
-      expect(encrypted.data).toBeTruthy();
-    });
+  it("preserves malformed files and reports the failure", async () => {
+    const file = path.join(dir, "session.json");
+    await fs.writeFile(file, "not-json");
+    await expect(store.load()).rejects.toThrow("Existing session data was preserved");
+    await expect(store.save(testToken)).rejects.toThrow();
+    expect(await fs.readFile(file, "utf8")).toBe("not-json");
   });
 
-  describe("save and load", () => {
-    it("save then load returns same TokenData", async () => {
-      const token: TokenData = {
-        accessToken: "test-token-abc123",
-        capturedAt: Date.now(),
-        expiresAt: Date.now() + 3600000,
-        source: "browser",
-      };
-
-      await sessionStore.save(token);
-      const loaded = await sessionStore.load();
-
-      expect(loaded).toEqual(token);
-    });
-
-    it("load returns null when no session file exists", async () => {
-      const loaded = await sessionStore.load();
-      expect(loaded).toBeNull();
-    });
-
-    it("load returns null when session file is corrupted", async () => {
-      // Create the session directory
-      await fs.mkdir(testDir, { recursive: true });
-
-      // Write garbage data to session file
-      const sessionFile = path.join(testDir, "session.json");
-      await fs.writeFile(sessionFile, "this is not valid JSON!");
-
-      const loaded = await sessionStore.load();
-      expect(loaded).toBeNull();
-    });
-
-    it("load returns null when session file has tampered ciphertext", async () => {
-      // First save a valid token
-      const token: TokenData = {
-        accessToken: "test-token-tamper",
-        capturedAt: Date.now(),
-        expiresAt: Date.now() + 3600000,
-        source: "browser",
-      };
-      await sessionStore.save(token);
-
-      // Tamper with the encrypted data
-      const sessionFile = path.join(testDir, "session.json");
-      const fileContent = await fs.readFile(sessionFile, "utf-8");
-      const sessionData = JSON.parse(fileContent);
-
-      // Modify the ciphertext - flip some bits
-      const tamperedData = sessionData.encrypted.data
-        .split("")
-        .map((c: string, i: number) => (i % 2 === 0 ? (c === "a" ? "b" : "a") : c))
-        .join("");
-      sessionData.encrypted.data = tamperedData;
-
-      await fs.writeFile(sessionFile, JSON.stringify(sessionData));
-
-      // Load should return null due to auth tag verification failure
-      const loaded = await sessionStore.load();
-      expect(loaded).toBeNull();
-    });
-
-    it("creates session directory if it does not exist", async () => {
-      const token: TokenData = {
-        accessToken: "test-token-mkdir",
-        capturedAt: Date.now(),
-        expiresAt: Date.now() + 3600000,
-        source: "browser",
-      };
-
-      // testDir does not exist yet
-      await sessionStore.save(token);
-
-      // Verify directory was created
-      const stats = await fs.stat(testDir);
-      expect(stats.isDirectory()).toBe(true);
-
-      // Verify file exists
-      const sessionFile = path.join(testDir, "session.json");
-      const fileStats = await fs.stat(sessionFile);
-      expect(fileStats.isFile()).toBe(true);
-    });
+  it("detects ciphertext tampering without removing the saved session", async () => {
+    await store.save(testToken);
+    const file = path.join(dir, "session.json");
+    const record = JSON.parse(await fs.readFile(file, "utf8"));
+    record.encrypted.authTag = "0".repeat(32);
+    const tampered = JSON.stringify(record);
+    await fs.writeFile(file, tampered);
+    await expect(store.load()).rejects.toThrow();
+    expect(await fs.readFile(file, "utf8")).toBe(tampered);
   });
 
-  describe("clear", () => {
-    it("clear removes session file", async () => {
-      const token: TokenData = {
-        accessToken: "test-token-clear",
-        capturedAt: Date.now(),
-        expiresAt: Date.now() + 3600000,
-        source: "browser",
-      };
+  it("reports a missing key without generating another key or erasing state", async () => {
+    await store.save(testToken);
+    const file = path.join(dir, "session.json");
+    const saved = await fs.readFile(file, "utf8");
+    backend.values.clear();
+    await expect(store.load()).rejects.toBeInstanceOf(NativeCredentialStoreError);
+    await expect(store.save(testToken)).rejects.toBeInstanceOf(NativeCredentialStoreError);
+    expect(backend.writes).toBe(1);
+    expect(await fs.readFile(file, "utf8")).toBe(saved);
+  });
 
-      await sessionStore.save(token);
+  it("propagates an unavailable native credential store", async () => {
+    await store.save(testToken);
+    backend.getPassword = async () => { throw new NativeCredentialStoreError(); };
+    await expect(store.load()).rejects.toBeInstanceOf(NativeCredentialStoreError);
+  });
 
-      // Verify file exists
-      const sessionFile = path.join(testDir, "session.json");
-      let stats = await fs.stat(sessionFile);
-      expect(stats.isFile()).toBe(true);
+  it.each(["username", "hostname"])("migrates legacy %s key derivation only after encrypted save succeeds", async (mode) => {
+    await writeLegacySession(dir, os.userInfo().username + (mode === "hostname" ? os.hostname() : ""));
+    expect(await store.load()).toEqual(testToken);
+    expect(JSON.parse(await fs.readFile(path.join(dir, "session.json"), "utf8")).version).toBe(2);
+    expect(await new SessionStore(dir, { backend }).load()).toEqual(testToken);
+  });
 
-      // Clear session
-      await sessionStore.clear();
+  it("preserves legacy ciphertext when native key storage fails", async () => {
+    const saved = await writeLegacySession(dir);
+    backend.setPassword = async () => { throw new NativeCredentialStoreError(); };
+    await expect(store.load()).rejects.toBeInstanceOf(NativeCredentialStoreError);
+    expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe(saved);
+  });
 
-      // Load should return null
-      const loaded = await sessionStore.load();
-      expect(loaded).toBeNull();
+  it("preserves legacy ciphertext when atomic writing fails", async () => {
+    const saved = await writeLegacySession(dir);
+    const failing = new SessionStore(dir, { backend, write: async () => { throw new Error("disk full"); } });
+    await expect(failing.load()).rejects.toThrow();
+    expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe(saved);
+  });
 
-      // File should not exist
-      try {
-        await fs.stat(sessionFile);
-        expect.fail("Session file should not exist after clear");
-      } catch (error: any) {
-        expect(error.code).toBe("ENOENT");
-      }
-    });
+  it("clears a readable session recoverably", async () => {
+    await store.save(testToken);
+    await store.clear();
+    expect(await store.load()).toBeNull();
+    expect((await fs.readdir(dir)).some((name) => name.startsWith("session.json.retired-"))).toBe(true);
+  });
+
+  it("never clears unreadable data", async () => {
+    await fs.writeFile(path.join(dir, "session.json"), "{broken");
+    await expect(store.clear()).rejects.toThrow();
+    expect(await fs.readFile(path.join(dir, "session.json"), "utf8")).toBe("{broken");
+  });
+
+  it("keeps a new login when an older mint tries to save or clear", async () => {
+    await store.save(testToken);
+    const newer = { ...testToken, capturedAt: 200, accessToken: "newer-login" };
+    await store.save(newer);
+    expect(await store.saveIfCurrent({ ...testToken, accessToken: "stale-mint" }, testToken)).toBe(false);
+    expect(await store.clearIfCurrent(testToken)).toBe(false);
+    expect(await store.load()).toEqual(newer);
+    expect(await store.saveIfCurrent({ ...newer, accessToken: "fresh-mint" }, newer)).toBe(true);
+  });
+
+  it("serializes simultaneous compare-and-save updates", async () => {
+    await store.save(testToken);
+    const other = new SessionStore(dir, { backend, trash: retireTestFile });
+    const result = await Promise.all([
+      store.saveIfCurrent({ ...testToken, accessToken: "mint-a" }, testToken),
+      other.saveIfCurrent({ ...testToken, accessToken: "mint-b" }, testToken),
+    ]);
+    expect(result.filter(Boolean)).toHaveLength(1);
+    expect(["mint-a", "mint-b"]).toContain((await store.load())?.accessToken);
   });
 });

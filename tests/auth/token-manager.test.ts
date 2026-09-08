@@ -3,11 +3,34 @@ import { TokenManager } from "../../src/auth/token-manager.js";
 import { SessionStore } from "../../src/auth/session-store.js";
 import type { TokenData } from "../../src/types/index.js";
 import type { mintAccessToken } from "../../src/auth/token-mint.js";
+import { TokenRefreshError } from "../../src/api/errors.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
 type MintFn = typeof mintAccessToken;
+
+// Session encryption has separate integration coverage. No unit test should
+// access the developer's native credential store.
+vi.mock("../../src/auth/session-store.js", () => {
+  const sessions = new Map<string, TokenData>();
+  return { SessionStore: class {
+    constructor(private dir: string) {}
+    async load() { return sessions.get(this.dir) ?? null; }
+    async save(token: TokenData) { sessions.set(this.dir, structuredClone(token)); }
+    async clear() { sessions.delete(this.dir); }
+    async saveIfCurrent(token: TokenData, expected: TokenData) {
+      if (JSON.stringify(await this.load()) !== JSON.stringify(expected)) return false;
+      await this.save(token);
+      return true;
+    }
+    async clearIfCurrent(expected: TokenData) {
+      if (JSON.stringify(await this.load()) !== JSON.stringify(expected)) return false;
+      await this.clear();
+      return true;
+    }
+  } };
+});
 
 describe("TokenManager", () => {
   let testDir: string;
@@ -227,6 +250,7 @@ describe("TokenManager", () => {
     /** An expired token that still carries the material needed to mint. */
     const expiredWithCookies = (): TokenData => ({
       accessToken: "stale-jwt",
+      tenantOrigin: BASE_URL,
       capturedAt: Date.now() - 7200000,
       expiresAt: Date.now() - 3600000,
       source: "browser",
@@ -323,9 +347,7 @@ describe("TokenManager", () => {
       const manager = makeManager(mint);
       await manager.setToken(expiredWithCookies());
 
-      const retrieved = await manager.getToken();
-
-      expect(retrieved).toBeNull();
+      await expect(manager.getToken()).rejects.toBeInstanceOf(TokenRefreshError);
       expect(await new SessionStore(testDir).load()).not.toBeNull();
     });
 
@@ -348,6 +370,83 @@ describe("TokenManager", () => {
       expect(mint).toHaveBeenCalledTimes(1);
       expect(first?.accessToken).toBe("fresh-jwt");
       expect(second?.accessToken).toBe("fresh-jwt");
+    });
+
+    it("prefers newly persisted cookie material over stale cached cookies", async () => {
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const);
+      const manager = makeManager(mint);
+      await manager.setToken(expiredWithCookies());
+      await new SessionStore(testDir).save({ ...expiredWithCookies(), cookieHeader: "d2lSessionVal=newer" });
+
+      await manager.getToken();
+
+      expect(mint).toHaveBeenCalledWith(expect.objectContaining({ cookieHeader: "d2lSessionVal=newer" }));
+    });
+
+    it.each(["success", "sessionExpired", "transport"] as const)(
+      "preserves another process's new login when an old mint returns %s", async (outcome) => {
+        const current = { ...expiredWithCookies(), accessToken: "other-process-jwt", expiresAt: Date.now() + 3600000 };
+        const mint = vi.fn(async () => {
+          await new SessionStore(testDir).save(current);
+          return outcome === "success" ? { ok: true, accessToken: "obsolete-mint" } as const :
+            { ok: false, reason: outcome } as const;
+        });
+        const manager = makeManager(mint);
+        await manager.setToken(expiredWithCookies());
+
+        expect(await manager.getToken()).toEqual(current);
+        expect(await new SessionStore(testDir).load()).toEqual(current);
+      },
+    );
+
+    it("refreshes a rejected JWT even when its local expiry is still in the future", async () => {
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "replacement-jwt" }) as const);
+      const manager = makeManager(mint);
+      const stale = { ...expiredWithCookies(), expiresAt: Date.now() + 3600000 };
+      await manager.setToken(stale);
+
+      expect((await manager.getToken(stale.accessToken))?.accessToken).toBe("replacement-jwt");
+      expect(mint).toHaveBeenCalledTimes(1);
+    });
+
+    it("reloads a new stored JWT when a cached JWT is rejected", async () => {
+      const mint = vi.fn(async () => ({ ok: true, accessToken: "unused" }) as const);
+      const manager = makeManager(mint);
+      const old = { ...expiredWithCookies(), expiresAt: Date.now() + 3600000 };
+      const next = { ...old, accessToken: "other-process" };
+      await manager.setToken(old);
+      await new SessionStore(testDir).save(next);
+
+      expect(await manager.getToken(old.accessToken)).toEqual(next);
+      expect(mint).not.toHaveBeenCalled();
+    });
+
+    it.each([undefined, "https://another-school.example"])(
+      "never returns or mints saved credentials bound to %s for the configured school", async tenantOrigin => {
+        const mint = vi.fn(async () => ({ ok: true, accessToken: "must-not-mint" }) as const);
+        const manager = makeManager(mint);
+        const foreign = { ...expiredWithCookies(), tenantOrigin, expiresAt: Date.now() + 3600000 };
+        await manager.setToken(foreign);
+
+        expect(await manager.getToken()).toBeNull();
+        expect(await new SessionStore(testDir).load()).toEqual(foreign);
+        expect(mint).not.toHaveBeenCalled();
+      },
+    );
+
+    it("binds refreshed JWTs to the validated school origin", async () => {
+      const manager = makeManager(vi.fn(async () => ({ ok: true, accessToken: "fresh-jwt" }) as const));
+      await manager.setToken(expiredWithCookies());
+      expect((await manager.getToken())?.tenantOrigin).toBe(BASE_URL);
+    });
+
+    it("surfaces unexpected mint exceptions without discarding session material", async () => {
+      const manager = makeManager(vi.fn(async () => { throw new Error("connection reset"); }));
+      const stale = expiredWithCookies();
+      await manager.setToken(stale);
+
+      await expect(manager.getToken()).rejects.toBeInstanceOf(TokenRefreshError);
+      expect(await new SessionStore(testDir).load()).toEqual(stale);
     });
 
     it("still accepts the positional session directory constructor", async () => {

@@ -13,6 +13,7 @@ import { writeFileAtomicSync } from "./atomic-write.js";
 export interface ConfigStoreData {
   baseUrl?: string;
   username?: string;
+  /** Read only for migration from v1. Never written by saveConfigStore. */
   password?: string;
   campus?: string;
   sessionDir?: string;
@@ -36,6 +37,9 @@ export function loadConfigStore(): ConfigStoreData {
 }
 
 export function saveConfigStore(config: ConfigStoreData): void {
+  if (config.password !== undefined) {
+    throw new Error("Passwords must be saved in the native credential store before saving configuration.");
+  }
   const isWindows = process.platform === "win32";
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { recursive: true, ...(isWindows ? {} : { mode: 0o700 }) });

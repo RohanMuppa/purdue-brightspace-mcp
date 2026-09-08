@@ -1,118 +1,100 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as realOs from "node:os";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { TokenData } from "../../src/types/index.js";
-
-/**
- * The session key used to be derived from the machine hostname. On a campus
- * network os.hostname() is a DHCP reverse-DNS name, for example
- * pal-nat186-166-147.itap.purdue.edu, and it changes with the lease. When it
- * changed, the AES-GCM tag stopped verifying and the saved session became
- * permanently unreadable, which cost the user a full MFA login every time they
- * moved between networks.
- *
- * The key now derives from the username and the per-install random salt, both
- * of which are stable for the life of the install.
- */
+import * as os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { transpileModule, ModuleKind, ScriptTarget } from "typescript";
+import { fileURLToPath } from "node:url";
+import { MemoryCredentialBackend, testToken } from "./secure-store-fixtures.js";
 
 let hostname = "host-at-save-time";
-
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
-  const patched = { ...actual, hostname: () => hostname };
-  return { ...patched, default: patched };
+  return { ...actual, hostname: () => hostname };
 });
-
 const { SessionStore } = await import("../../src/auth/session-store.js");
+const { getSessionEncryptionKey } = await import("../../src/auth/credential-store.js");
 
-const token = (): TokenData => ({
-  accessToken: "bearer-jwt-value",
-  capturedAt: 1_756_000_000_000,
-  expiresAt: 1_756_003_600_000,
-  source: "browser",
-  cookieHeader: "d2lSessionVal=abc; d2lSecureSessionVal=def",
-  csrfToken: "xsrf-token-value",
-});
-
-describe("session key stability", () => {
+describe("native session key stability", () => {
   let dir: string;
-
+  let backend: MemoryCredentialBackend;
   beforeEach(async () => {
-    dir = await fs.mkdtemp(path.join(realOs.tmpdir(), "bmcp-session-"));
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "session-key-test-"));
+    backend = new MemoryCredentialBackend();
     hostname = "host-at-save-time";
   });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
 
-  afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
-  });
-
-  it("loads a session saved under a different hostname", async () => {
-    hostname = "pal-nat186-166-147.itap.purdue.edu";
-    await new SessionStore(dir).save(token());
-
-    // The laptop moves to another network and DHCP renames it.
-    hostname = "dhcp-10-186-99-4.dorm.purdue.edu";
-    const loaded = await new SessionStore(dir).load();
-
-    expect(loaded).not.toBeNull();
-    expect(loaded!.accessToken).toBe("bearer-jwt-value");
-    expect(loaded!.cookieHeader).toContain("d2lSessionVal");
-    expect(loaded!.csrfToken).toBe("xsrf-token-value");
-  });
-
-  it("loads when the hostname is not resolvable at all", async () => {
-    await new SessionStore(dir).save(token());
-
+  it("loads after a DHCP hostname change", async () => {
+    await new SessionStore(dir, { backend }).save(testToken);
+    hostname = "different-network-hostname";
+    expect(await new SessionStore(dir, { backend }).load()).toEqual(testToken);
     hostname = "";
-    const loaded = await new SessionStore(dir).load();
-
-    expect(loaded?.accessToken).toBe("bearer-jwt-value");
+    expect(await new SessionStore(dir, { backend }).load()).toEqual(testToken);
   });
 
-  it("still round-trips normally", async () => {
-    const store = new SessionStore(dir);
-    const original = token();
-    await store.save(original);
-
-    expect(await store.load()).toEqual(original);
+  it("uses independent random keys for different installations", async () => {
+    const a = await getSessionEncryptionKey(path.join(dir, "a"), backend);
+    const b = await getSessionEncryptionKey(path.join(dir, "b"), backend);
+    expect(a.equals(b)).toBe(false);
+    expect(a).toHaveLength(32);
   });
 
-  it("keeps the salt, so two installs derive different keys", async () => {
-    const dirB = await fs.mkdtemp(path.join(realOs.tmpdir(), "bmcp-session-b-"));
-    try {
-      await new SessionStore(dir).save(token());
-      await new SessionStore(dirB).save(token());
+  it("canonicalizes a symlink to the same session directory", async () => {
+    if (process.platform === "win32") return;
+    const canonical = path.join(dir, "actual");
+    const linked = path.join(dir, "linked");
+    await fs.mkdir(canonical);
+    await fs.symlink(canonical, linked);
+    expect(await getSessionEncryptionKey(linked, backend)).toEqual(await getSessionEncryptionKey(canonical, backend));
+    expect(backend.writes).toBe(1);
+  });
 
-      const [a, b] = await Promise.all([
-        fs.readFile(path.join(dir, "salt")),
-        fs.readFile(path.join(dirB, "salt")),
-      ]);
-      expect(a.equals(b)).toBe(false);
+  it("creates only one key for simultaneous callers", async () => {
+    const keys = await Promise.all(Array.from({ length: 8 }, () => getSessionEncryptionKey(dir, backend)));
+    for (const key of keys) expect(key).toEqual(keys[0]);
+    expect(backend.writes).toBe(1);
+  });
 
-      const cipherA = JSON.parse(await fs.readFile(path.join(dir, "session.json"), "utf-8"));
-      const cipherB = JSON.parse(await fs.readFile(path.join(dirB, "session.json"), "utf-8"));
-      expect(cipherA.encrypted.data).not.toBe(cipherB.encrypted.data);
-    } finally {
-      await fs.rm(dirB, { recursive: true, force: true });
+  it("serializes master key creation across independent Node processes", async () => {
+    const codeDir = path.join(dir, "worker-code");
+    const sessionDir = path.join(dir, "session");
+    await fs.mkdir(codeDir);
+    await fs.writeFile(path.join(codeDir, "package.json"), JSON.stringify({ type: "module" }));
+    for (const name of ["credential-store", "auth-lock"]) {
+      const source = await fs.readFile(fileURLToPath(new URL(`../../src/auth/${name}.ts`, import.meta.url)), "utf8");
+      const { outputText } = transpileModule(source, { compilerOptions: { target: ScriptTarget.ES2022, module: ModuleKind.ES2022 } });
+      await fs.writeFile(path.join(codeDir, `${name}.js`), outputText);
     }
+    const worker = `
+      import { getSessionEncryptionKey } from './credential-store.js';
+      import * as fs from 'node:fs/promises';
+      import * as path from 'node:path';
+      const dir = process.argv[1];
+      const keyFile = path.join(dir, 'dummy-native-key');
+      const backend = {
+        async getPassword() {
+          try { return await fs.readFile(keyFile, 'utf8'); }
+          catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+        },
+        async setPassword(service, account, key) {
+          await fs.appendFile(path.join(dir, 'dummy-native-writes'), 'write\\n');
+          await fs.writeFile(keyFile, key);
+        },
+        async deletePassword() {},
+      };
+      process.stdout.write((await getSessionEncryptionKey(dir, backend)).toString('hex'));
+    `;
+    const run = promisify(execFile);
+    const results = await Promise.all(Array.from({ length: 5 }, () => run(process.execPath, ["--input-type=module", "-e", worker, sessionDir], { cwd: codeDir })));
+    expect(new Set(results.map((result) => result.stdout)).size).toBe(1);
+    expect(await fs.readFile(path.join(sessionDir, "dummy-native-writes"), "utf8")).toBe("write\n");
   });
 
-  it("discards a session it cannot decrypt instead of failing forever", async () => {
-    const store = new SessionStore(dir);
-    await store.save(token());
-
-    // Simulate a file written by the old hostname-keyed build: valid JSON,
-    // valid structure, ciphertext this install can never authenticate.
-    const file = path.join(dir, "session.json");
-    const onDisk = JSON.parse(await fs.readFile(file, "utf-8"));
-    onDisk.encrypted.data = onDisk.encrypted.data.replace(/^../, "ff");
-    await fs.writeFile(file, JSON.stringify(onDisk));
-
-    expect(await store.load()).toBeNull();
-
-    // The unreadable file is gone, so the next start does a clean login
-    // rather than warning about the same file on every single run.
-    await expect(fs.access(file)).rejects.toThrow();
+  it("does not create a new key when a different encrypted store still needs the missing key", async () => {
+    await fs.writeFile(path.join(dir, "storage-state.encrypted.json"), "encrypted-state-placeholder");
+    await expect(getSessionEncryptionKey(dir, backend)).rejects.toThrow("encrypted authentication state still exists");
+    expect(backend.writes).toBe(0);
   });
 });

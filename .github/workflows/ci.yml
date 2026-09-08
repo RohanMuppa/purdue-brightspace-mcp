@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
 
 jobs:
   test:
@@ -27,7 +26,7 @@ jobs:
           cache: npm
 
       # Skips the postinstall Playwright chromium download. Nothing in the
-      # test suite launches a browser, and the download is about 150 MB.
+      # default test suite launches a browser. Real-browser fixtures run opt-in.
       - run: npm ci --ignore-scripts
 
       - name: Type check

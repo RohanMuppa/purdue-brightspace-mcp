@@ -4,11 +4,12 @@
  * Licensed under MIT — see LICENSE file for details.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
 import { log } from "../utils/logger.js";
+import { AuthError } from "../utils/errors.js";
 
 /**
  * Timeout for the auth process. It has to outlast the child's own MFA wait,
@@ -16,7 +17,42 @@ import { log } from "../utils/logger.js";
  * a number off the screen. A shorter parent budget would kill the child in the
  * middle of a sign-in the user was still completing.
  */
-const AUTH_TIMEOUT_MS = 6 * 60 * 1000; // 6 minutes
+const AUTH_TIMEOUT_MS = 8 * 60 * 1000;
+const KILL_GRACE_MS = 5000;
+
+export type AuthFailureKind = "busy" | "cooldown" | "unsupported" | "secureStorage" | "transport" | "timeout" | "failed";
+
+export class AuthProcessError extends AuthError {
+  constructor(public readonly kind: AuthFailureKind, message: string) {
+    super(message);
+    this.name = "AuthProcessError";
+  }
+}
+
+export interface AuthRunnerOptions {
+  timeoutMs?: number;
+  onProgress?: (line: string) => void;
+}
+
+/** Chromium can lead a separate process group, so a forced stop needs its PID. */
+function descendantPids(parentPid: number): number[] {
+  const rows = execFileSync("ps", ["-eo", "pid=,ppid="], {
+    encoding: "utf8", timeout: 1000,
+  }).trim().split("\n").map(line => line.trim().split(/\s+/).map(Number));
+  const descendants: number[] = [];
+  const visited = new Set([parentPid]);
+  const visit = (parent: number) => {
+    for (const [pid, ppid] of rows) {
+      if (ppid === parent && Number.isInteger(pid) && pid > 1 && !visited.has(pid)) {
+        visited.add(pid);
+        visit(pid);
+        descendants.push(pid);
+      }
+    }
+  };
+  visit(parentPid);
+  return descendants;
+}
 
 /**
  * Forward a child stream to the server log, one line at a time.
@@ -50,76 +86,126 @@ function forwardLines(
  * Launches the brightspace-auth CLI as a child process to
  * re-authenticate when the current session has expired.
  *
- * The child process inherits the parent's environment (so .env credentials
- * are available via dotenv in the auth CLI) and runs with the project root
- * as CWD (so dotenv can find the .env file).
+ * The child inherits the parent's resolved environment and working directory,
+ * so both processes read the same account configuration and .env file.
  */
 export class AuthRunner {
   private running = false;
   private readonly scriptPath: string;
-  private readonly projectRoot: string;
+  private readonly timeoutMs: number;
+  private readonly onProgress?: (line: string) => void;
 
-  constructor() {
+  constructor(options: AuthRunnerOptions = {}) {
     // Resolve paths relative to this file's compiled location (build/auth/auth-runner.js)
     const thisDir = path.dirname(fileURLToPath(import.meta.url));
     this.scriptPath = path.resolve(thisDir, "..", "auth-cli.js");
-    this.projectRoot = path.resolve(thisDir, "..", "..");
+    this.timeoutMs = options.timeoutMs ?? AUTH_TIMEOUT_MS;
+    this.onProgress = options.onProgress;
   }
 
   /**
    * Spawn the auth CLI and wait for it to complete.
-   * Returns true if authentication succeeded, false otherwise.
-   * Prevents concurrent auth attempts via a simple mutex.
+   * Returns true on success and throws a useful error on failure.
+   * Prevents concurrent attempts within this MCP process.
    */
   async run(): Promise<boolean> {
     if (this.running) {
-      log("DEBUG", "Auth already running, skipping duplicate attempt");
-      return false;
+      throw new AuthProcessError("busy", "Authentication already in progress. Complete the existing attempt, then retry.");
     }
 
     this.running = true;
     try {
       log("INFO", "Auto-launching brightspace-auth...");
 
-      return await new Promise<boolean>((resolve) => {
+      return await new Promise<boolean>((resolve, reject) => {
         const child = spawn(
           process.execPath, // use the same Node binary
-          [this.scriptPath],
+          [this.scriptPath, "--automatic"],
           {
-            cwd: this.projectRoot,
+            cwd: process.cwd(),
             env: { ...process.env },
             stdio: ["ignore", "pipe", "pipe"],
+            detached: process.platform !== "win32",
           },
         );
 
         let timedOut = false;
+        let settled = false;
+        let killTimer: ReturnType<typeof setTimeout> | undefined;
+        const kill = (signal: NodeJS.Signals) => {
+          try {
+            if (child.pid && process.platform === "win32") {
+              execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+                stdio: "ignore", timeout: 5000,
+              });
+            } else if (child.pid) {
+              if (signal === "SIGKILL") {
+                try {
+                  for (const pid of descendantPids(child.pid)) {
+                    try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ }
+                  }
+                } catch { /* Still terminate the owned process group if ps is unavailable. */ }
+              }
+              process.kill(-child.pid, signal);
+            } else child.kill(signal);
+          } catch {
+            // The child may already have exited between close and cleanup.
+          }
+        };
+        const onExit = () => kill("SIGTERM");
+        process.once("exit", onExit);
+        const finish = (error?: AuthProcessError) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (killTimer) clearTimeout(killTimer);
+          process.off("exit", onExit);
+          if (error) reject(error);
+          else resolve(true);
+        };
         const timer = setTimeout(() => {
           timedOut = true;
-          child.kill("SIGTERM");
-        }, AUTH_TIMEOUT_MS);
+          kill("SIGTERM");
+          killTimer = setTimeout(() => {
+            kill("SIGKILL");
+            finish(new AuthProcessError("timeout", "Authentication timed out. Run brightspace-auth to try again."));
+          }, KILL_GRACE_MS);
+        }, this.timeoutMs);
 
-        forwardLines(child.stderr, (line) => log("INFO", line));
+        forwardLines(child.stderr, (line) => {
+          log("INFO", line);
+          try { this.onProgress?.(line); } catch { /* Logging must not interrupt authentication. */ }
+        });
         // Piped and drained rather than ignored: a full stdout pipe would
         // block the child mid-login.
         forwardLines(child.stdout, (line) => log("DEBUG", line));
 
         child.on("error", (error) => {
-          clearTimeout(timer);
+          if (settled) return;
           log("ERROR", "Auto-auth process failed", error.message);
-          resolve(false);
+          kill("SIGKILL");
+          finish(new AuthProcessError("failed", "Could not start authentication. Run brightspace-auth for details."));
         });
 
         child.on("close", (code) => {
-          clearTimeout(timer);
+          if (settled) return;
           if (timedOut) {
-            log("ERROR", `Auto-auth timed out after ${AUTH_TIMEOUT_MS / 60000} minutes`);
-            resolve(false);
+            kill("SIGKILL");
+            finish(new AuthProcessError("timeout", "Authentication timed out. Run brightspace-auth to try again."));
           } else if (code === 0) {
             log("INFO", "Auto-auth completed successfully");
-            resolve(true);
+            finish();
           } else {
-            log("ERROR", `Auto-auth process failed with exit code ${code}`);
-            resolve(false);
+            const failures: Record<number, [AuthFailureKind, string]> = {
+              2: ["busy", "Authentication already in progress in another process. Complete that attempt, then retry."],
+              3: ["cooldown", "Automatic MFA is paused after an unsuccessful attempt. Run brightspace-auth to retry immediately."],
+              4: ["unsupported", "This identity provider cannot complete headless authentication. See the authentication logs."],
+              5: ["secureStorage", "The native credential store is unavailable or locked. Unlock it and retry."],
+              6: ["transport", "Brightspace authentication is temporarily unavailable because of a network or server failure. Your saved session was preserved. Try again later."],
+            };
+            const [kind, message] = failures[code ?? -1] ?? ["failed", "Authentication failed. Run brightspace-auth to try again."];
+            kill("SIGKILL");
+            finish(new AuthProcessError(kind, message));
           }
         });
       });

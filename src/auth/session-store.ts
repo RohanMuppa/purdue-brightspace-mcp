@@ -1,221 +1,186 @@
 /**
- * Purdue Brightspace MCP Server
+ * Brightspace MCP Server
  * Copyright (c) 2026 Rohan Muppa. All rights reserved.
- * Licensed under MIT — see LICENSE file for details.
+ * Licensed under MIT. See LICENSE file for details.
  */
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as fsSync from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import type { TokenData, EncryptedData, SessionFile } from "../types/index.js";
+import type { TokenData, SessionFile } from "../types/index.js";
 import { SessionStoreError } from "../utils/errors.js";
-import { log } from "../utils/logger.js";
-import { writeFileAtomic } from "../utils/atomic-write.js";
+import { acquireProcessLock, AuthenticationInProgressError } from "./auth-lock.js";
+import { NativeCredentialStoreError } from "./credential-store.js";
+import { decrypt, readEncryptedRecord, saveEncryptedRecord, trashFile, type EncryptedRecord, type SecureStoreOptions } from "./encrypted-store.js";
 
 const DEFAULT_SESSION_DIR = path.join(os.homedir(), ".d2l-session");
-const SESSION_FILE_NAME = "session.json";
-const SESSION_VERSION = 1;
 
-// Encryption constants
-const ALGORITHM = "aes-256-gcm";
-const IV_LENGTH = 12; // GCM recommended IV length
-const AUTH_TAG_LENGTH = 16; // GCM auth tag length
-const SALT_LENGTH = 16;
-const SALT_FILE_NAME = "salt";
+function validTenantOrigin(origin: unknown): boolean {
+  if (origin === undefined) return true;
+  if (typeof origin !== "string") return false;
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === "https:" && parsed.origin === origin;
+  } catch {
+    return false;
+  }
+}
 
-/**
- * SessionStore manages encrypted token persistence to disk.
- * Uses AES-256-GCM for encryption with a key derived from username + hostname.
- */
+function validToken(value: unknown): value is TokenData {
+  const token = value as TokenData | null;
+  return !!token && typeof token.accessToken === "string" && Number.isFinite(token.capturedAt) && Number.isFinite(token.expiresAt)
+    && (token.source === "browser" || token.source === "cache")
+    && (token.cookieHeader === undefined || typeof token.cookieHeader === "string")
+    && (token.csrfToken === undefined || typeof token.csrfToken === "string")
+    && validTenantOrigin(token.tenantOrigin);
+}
+
+function equalToken(a: TokenData | null, b: TokenData | null): boolean {
+  return a === b || (!!a && !!b && a.accessToken === b.accessToken && a.capturedAt === b.capturedAt
+    && a.expiresAt === b.expiresAt && a.source === b.source && a.cookieHeader === b.cookieHeader && a.csrfToken === b.csrfToken && a.tenantOrigin === b.tenantOrigin);
+}
+
+/** AES-GCM session persistence with a random key held by the native secret store. */
 export class SessionStore {
   private readonly sessionDir: string;
   private readonly sessionFilePath: string;
 
-  constructor(sessionDir?: string) {
-    this.sessionDir = sessionDir ?? DEFAULT_SESSION_DIR;
-    this.sessionFilePath = path.join(this.sessionDir, SESSION_FILE_NAME);
+  constructor(sessionDir = DEFAULT_SESSION_DIR, private readonly options: SecureStoreOptions = {}) {
+    this.sessionDir = sessionDir;
+    this.sessionFilePath = path.join(sessionDir, "session.json");
   }
 
-  /**
-   * Get or create a random salt unique to this installation.
-   * Stored at ~/.d2l-session/salt with restricted permissions.
-   */
-  private getOrCreateSalt(): Buffer {
-    const saltPath = path.join(this.sessionDir, SALT_FILE_NAME);
+  private async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    await fs.mkdir(this.sessionDir, { recursive: true, mode: 0o700 });
+    let release: (() => Promise<void>) | undefined;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        release = await acquireProcessLock(path.join(this.sessionDir, ".session-write.lock"));
+        break;
+      } catch (error) {
+        if (!(error instanceof AuthenticationInProgressError) || attempt === 99) throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+    }
     try {
-      return fsSync.readFileSync(saltPath);
-    } catch {
-      // Salt doesn't exist yet — create session dir and generate one
-      const isWindows = process.platform === "win32";
-      fsSync.mkdirSync(this.sessionDir, {
-        recursive: true,
-        ...(isWindows ? {} : { mode: 0o700 }),
-      });
-      const salt = crypto.randomBytes(SALT_LENGTH);
-      fsSync.writeFileSync(saltPath, salt, {
-        ...(isWindows ? {} : { mode: 0o600 }),
-      });
-      return salt;
+      return await operation();
+    } finally {
+      await release?.();
     }
   }
 
-  /**
-   * Derive AES-256 key from username and hostname using scrypt.
-   * Uses a per-installation random salt to prevent precomputation attacks.
-   */
-  private deriveKey(): Buffer {
-    // Deliberately NOT the hostname. On a campus network os.hostname() is a
-    // DHCP reverse-DNS name (pal-nat186-166-147.itap.purdue.edu), so it
-    // changes with the lease. Keying on it meant that moving between networks
-    // silently made the saved session undecryptable, and the user paid for it
-    // with a full MFA login. The per-install random salt already provides the
-    // uniqueness the hostname was there for, and it is stable.
-    const username = os.userInfo().username;
-    const salt = this.getOrCreateSalt();
-
-    // Use scrypt to derive a 32-byte key (256 bits for AES-256)
-    return crypto.scryptSync(username, salt, 32);
+  private async readFile(): Promise<EncryptedRecord | SessionFile | null> {
+    try {
+      return JSON.parse(await fs.readFile(this.sessionFilePath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
   }
 
-  /**
-   * Encrypt plaintext using AES-256-GCM.
-   * Returns IV, auth tag, and ciphertext as hex strings.
-   */
-  private encrypt(plaintext: string): EncryptedData {
-    const key = this.deriveKey();
-    const iv = crypto.randomBytes(IV_LENGTH);
-
-    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-
-    let encrypted = cipher.update(plaintext, "utf8", "hex");
-    encrypted += cipher.final("hex");
-
-    const authTag = cipher.getAuthTag();
-
-    return {
-      iv: iv.toString("hex"),
-      authTag: authTag.toString("hex"),
-      data: encrypted,
-    };
+  private async decode(record: EncryptedRecord | SessionFile): Promise<TokenData> {
+    let token: unknown;
+    if (record.version === 2) {
+      token = await readEncryptedRecord(this.sessionDir, record, "session", this.options);
+    } else if (record.version === 1) {
+      // Never generate a salt when loading old data. That would make recovery harder.
+      const salt = await fs.readFile(path.join(this.sessionDir, "salt"));
+      const username = os.userInfo().username;
+      let lastError: unknown;
+      for (const material of [username, username + os.hostname()]) {
+        try {
+          token = JSON.parse(decrypt(record.encrypted, crypto.scryptSync(material, salt, 32)));
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (!token) throw lastError;
+    } else {
+      throw new Error("Unsupported saved session version.");
+    }
+    if (!validToken(token)) throw new Error("Invalid saved session contents.");
+    return token;
   }
 
-  /**
-   * Decrypt ciphertext using AES-256-GCM.
-   * Returns plaintext string, or throws if auth tag verification fails.
-   */
-  private decrypt(encrypted: EncryptedData): string {
-    const key = this.deriveKey();
-    const iv = Buffer.from(encrypted.iv, "hex");
-    const authTag = Buffer.from(encrypted.authTag, "hex");
-
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(authTag);
-
-    let decrypted = decipher.update(encrypted.data, "hex", "utf8");
-    decrypted += decipher.final("utf8");
-
-    return decrypted;
+  private async loadUnlocked(): Promise<TokenData | null> {
+    const record = await this.readFile();
+    if (!record) return null;
+    const token = await this.decode(record);
+    if (record.version === 1) await this.saveUnlocked(token);
+    return token;
   }
 
-  /**
-   * Save token to disk with encryption.
-   * Creates session directory if it doesn't exist.
-   */
+  private async saveUnlocked(token: TokenData): Promise<void> {
+    if (!validToken(token)) throw new Error("Invalid session token.");
+    await saveEncryptedRecord(this.sessionDir, this.sessionFilePath, "session", token, this.options);
+  }
+
+  private storeError(action: string, error: unknown): never {
+    if (error instanceof NativeCredentialStoreError || error instanceof AuthenticationInProgressError) throw error;
+    throw new SessionStoreError(`Failed to ${action} session. Existing session data was preserved.`, error instanceof Error ? error : new Error(String(error)));
+  }
+
   async save(token: TokenData): Promise<void> {
     try {
-      // Ensure session directory exists with restricted permissions (owner-only on Unix)
-      const isWindows = process.platform === "win32";
-      await fs.mkdir(this.sessionDir, {
-        recursive: true,
-        ...(isWindows ? {} : { mode: 0o700 }),
+      await this.withWriteLock(async () => {
+        const current = await this.readFile();
+        if (current) await this.decode(current);
+        await this.saveUnlocked(token);
       });
-
-      const plaintext = JSON.stringify(token);
-      const encrypted = this.encrypt(plaintext);
-
-      const sessionFile: SessionFile = {
-        version: SESSION_VERSION,
-        encrypted,
-        createdAt: Date.now(),
-        expiresAt: token.expiresAt,
-      };
-
-      // Staged and renamed, so the auth CLI and a running server can never
-      // leave each other a half-written file.
-      await writeFileAtomic(
-        this.sessionFilePath,
-        JSON.stringify(sessionFile, null, 2),
-        isWindows ? {} : { mode: 0o600 }
-      );
-
-      log("DEBUG", `Session saved to ${this.sessionFilePath}`);
     } catch (error) {
-      const err =
-        error instanceof Error ? error : new Error(String(error));
-      log("ERROR", `Failed to save session: ${err.message}`);
-      throw new SessionStoreError("Failed to save session", err);
+      this.storeError("save", error);
     }
   }
 
-  /**
-   * Load token from disk with decryption.
-   * Returns null if file doesn't exist or is corrupted (graceful degradation).
-   */
+  /** Missing files return null. Damaged or inaccessible secrets fail without MFA. */
   async load(): Promise<TokenData | null> {
     try {
-      // Check if file exists
-      try {
-        await fs.access(this.sessionFilePath);
-      } catch {
-        log("DEBUG", "No session file found");
-        return null;
-      }
-
-      // Read and parse session file
-      const fileContent = await fs.readFile(this.sessionFilePath, "utf-8");
-      const sessionFile: SessionFile = JSON.parse(fileContent);
-
-      // Decrypt token data
-      const plaintext = this.decrypt(sessionFile.encrypted);
-      const token: TokenData = JSON.parse(plaintext);
-
-      log("DEBUG", `Session loaded from ${this.sessionFilePath}`);
-      return token;
+      const record = await this.readFile();
+      if (!record) return null;
+      if (record.version === 1) return await this.withWriteLock(() => this.loadUnlocked());
+      return await this.decode(record);
     } catch (error) {
-      const err =
-        error instanceof Error ? error : new Error(String(error));
-      log("WARN", `Failed to load session: ${err.message}`);
-      // A session this install cannot read is never going to become readable:
-      // it was written by an older build whose key derivation differed, or the
-      // file is damaged. Removing it means the next run does one clean login
-      // instead of logging the same warning on every start forever.
-      try {
-        await fs.rm(this.sessionFilePath, { force: true });
-        log("DEBUG", "Removed the unreadable session file, a fresh login is needed");
-      } catch {
-        // Nothing more to do: the caller re-authenticates either way.
-      }
-      // Return null instead of throwing - graceful degradation
-      return null;
+      this.storeError("load", error);
     }
   }
 
-  /**
-   * Clear session by deleting the session file.
-   */
   async clear(): Promise<void> {
     try {
-      await fs.unlink(this.sessionFilePath);
-      log("DEBUG", `Session cleared: ${this.sessionFilePath}`);
-    } catch (error: any) {
-      // Ignore ENOENT errors - file already doesn't exist
-      if (error.code !== "ENOENT") {
-        const err =
-          error instanceof Error ? error : new Error(String(error));
-        log("WARN", `Failed to clear session: ${err.message}`);
-      }
+      await this.withWriteLock(async () => {
+        const current = await this.readFile();
+        if (!current) return;
+        await this.decode(current);
+        await trashFile(this.sessionFilePath, this.options);
+      });
+    } catch (error) {
+      this.storeError("clear", error);
+    }
+  }
+
+  /** Prevent a slow mint from replacing credentials saved by a newer login. */
+  async saveIfCurrent(token: TokenData, expected: TokenData | null): Promise<boolean> {
+    try {
+      return await this.withWriteLock(async () => {
+        if (!equalToken(await this.loadUnlocked(), expected)) return false;
+        await this.saveUnlocked(token);
+        return true;
+      });
+    } catch (error) {
+      this.storeError("save", error);
+    }
+  }
+
+  async clearIfCurrent(expected: TokenData): Promise<boolean> {
+    try {
+      return await this.withWriteLock(async () => {
+        if (!equalToken(await this.loadUnlocked(), expected)) return false;
+        await trashFile(this.sessionFilePath, this.options);
+        return true;
+      });
+    } catch (error) {
+      this.storeError("clear", error);
     }
   }
 }

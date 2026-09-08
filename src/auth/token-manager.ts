@@ -8,6 +8,7 @@ import type { TokenData } from "../types/index.js";
 import { SessionStore } from "./session-store.js";
 import { mintAccessToken } from "./token-mint.js";
 import { log } from "../utils/logger.js";
+import { TokenRefreshError } from "../api/errors.js";
 
 /**
  * Token refresh buffer - tokens within this time of expiry are considered invalid.
@@ -26,6 +27,8 @@ export interface TokenManagerOptions {
   tokenTtl?: number;
   /** Injection seam for tests. */
   mint?: typeof mintAccessToken;
+  /** Persistence injection keeps unit tests independent of native credentials. */
+  sessionStore?: Pick<SessionStore, "load" | "save" | "clear" | "saveIfCurrent" | "clearIfCurrent">;
 }
 
 /**
@@ -34,12 +37,13 @@ export interface TokenManagerOptions {
  */
 export class TokenManager {
   private cachedToken: TokenData | null = null;
-  private readonly sessionStore: SessionStore;
+  private readonly sessionStore: NonNullable<TokenManagerOptions["sessionStore"]>;
   private readonly baseUrl?: string;
   private readonly tokenTtl: number;
   private readonly mint: typeof mintAccessToken;
   /** Single in-flight mint, so concurrent callers share one request. */
   private mintInFlight: Promise<TokenData | null> | null = null;
+  private rejectedAccessToken: string | null = null;
 
   constructor(sessionDir?: string);
   constructor(options: TokenManagerOptions);
@@ -49,8 +53,8 @@ export class TokenManager {
         ? { sessionDir: sessionDirOrOptions }
         : sessionDirOrOptions;
 
-    this.sessionStore = new SessionStore(options.sessionDir);
-    this.baseUrl = options.baseUrl;
+    this.sessionStore = options.sessionStore ?? new SessionStore(options.sessionDir);
+    this.baseUrl = options.baseUrl ? new URL(options.baseUrl).origin : undefined;
     this.tokenTtl = options.tokenTtl ?? DEFAULT_TOKEN_TTL_SECONDS;
     this.mint = options.mint ?? mintAccessToken;
   }
@@ -60,16 +64,17 @@ export class TokenManager {
    * Checks memory cache first, then loads from disk if needed.
    * Returns null if token is expired or within refresh buffer.
    */
-  async getToken(): Promise<TokenData | null> {
+  async getToken(rejectedAccessToken?: string): Promise<TokenData | null> {
+    if (rejectedAccessToken) this.rejectedAccessToken = rejectedAccessToken;
     // Check memory cache first
-    if (this.cachedToken && this.isValid(this.cachedToken)) {
+    if (this.cachedToken && this.isUsable(this.cachedToken)) {
       log("DEBUG", "Returning cached token");
       return this.cachedToken;
     }
 
     // Try loading from disk
     const storedToken = await this.sessionStore.load();
-    if (storedToken && this.isValid(storedToken)) {
+    if (storedToken && this.isUsable(storedToken)) {
       log("DEBUG", "Loaded valid token from session store");
       this.cachedToken = storedToken;
       return storedToken;
@@ -77,7 +82,9 @@ export class TokenManager {
 
     // The token is stale, but if it carried the session material we can trade
     // that for a fresh JWT over plain HTTP instead of relaunching the browser.
-    const mintable = this.pickMintable(this.cachedToken, storedToken);
+    // Disk may have been refreshed by another MCP process. Never prefer stale
+    // cached cookies over the current persisted session.
+    const mintable = this.pickMintable(storedToken);
     if (mintable) {
       const minted = await this.mintFromSession(mintable);
       if (minted) return minted;
@@ -88,17 +95,10 @@ export class TokenManager {
   }
 
   /**
-   * First candidate that carries both the cookie header and the XSRF token,
-   * or null when neither can be used to mint.
+   * Only use persisted session material, including updates from other processes.
    */
-  private pickMintable(
-    ...candidates: Array<TokenData | null>
-  ): TokenData | null {
-    if (!this.baseUrl) return null;
-    for (const candidate of candidates) {
-      if (candidate?.cookieHeader && candidate.csrfToken) return candidate;
-    }
-    return null;
+  private pickMintable(candidate: TokenData | null): TokenData | null {
+    return this.baseUrl && candidate && this.matchesTenant(candidate) && candidate.cookieHeader && candidate.csrfToken ? candidate : null;
   }
 
   /**
@@ -121,43 +121,61 @@ export class TokenManager {
   private async runMint(stale: TokenData): Promise<TokenData | null> {
     log("DEBUG", "Trying to mint an access token from the session cookie");
 
-    const result = await this.mint({
-      baseUrl: this.baseUrl as string,
-      cookieHeader: stale.cookieHeader as string,
-      csrfToken: stale.csrfToken as string,
-    });
+    let result;
+    try {
+      result = await this.mint({
+        baseUrl: this.baseUrl as string,
+        cookieHeader: stale.cookieHeader as string,
+        csrfToken: stale.csrfToken as string,
+      });
+    } catch (error) {
+      throw new TokenRefreshError("token service request failed", error instanceof Error ? error : undefined);
+    }
+
+    // The auth CLI or another MCP process can finish a login while HTTP minting
+    // is in flight. Its newer session wins over either result of this request.
+    const current = await this.sessionStore.load();
+    if (current && !this.sameToken(current, stale)) {
+      this.cachedToken = current;
+      if (this.isUsable(current)) return current;
+      throw new TokenRefreshError("saved authentication changed during refresh");
+    }
 
     if (result.ok) {
       const now = Date.now();
       const token: TokenData = {
         accessToken: result.accessToken,
+        tenantOrigin: this.baseUrl,
         capturedAt: now,
         expiresAt: now + this.tokenTtl * 1000,
         source: "browser",
         cookieHeader: stale.cookieHeader,
         csrfToken: stale.csrfToken,
       };
-      await this.setToken(token);
+      if (!await this.sessionStore.saveIfCurrent(token, stale)) return this.afterConcurrentChange();
+      this.cachedToken = token;
+      this.rejectedAccessToken = null;
       log("INFO", "Minted a fresh access token from the session cookie");
       return token;
     }
 
     if (result.reason === "sessionExpired") {
       log("INFO", "The session cookie has expired, a browser login is needed");
-      await this.clearToken();
+      if (!await this.sessionStore.clearIfCurrent(stale)) return this.afterConcurrentChange();
+      this.cachedToken = null;
       return null;
     }
 
-    log("WARN", `Could not mint an access token: ${result.detail ?? "transport failure"}`);
-    return null;
+    throw new TokenRefreshError(result.detail ?? "unexpected token service response");
   }
 
   /**
    * Set a new token, caching in memory and persisting to disk.
    */
   async setToken(token: TokenData): Promise<void> {
-    this.cachedToken = token;
     await this.sessionStore.save(token);
+    this.cachedToken = token;
+    this.rejectedAccessToken = null;
     log("DEBUG", "Token cached and persisted");
   }
 
@@ -168,6 +186,25 @@ export class TokenManager {
     this.cachedToken = null;
     await this.sessionStore.clear();
     log("DEBUG", "Token cleared from memory and disk");
+  }
+
+  private isUsable(token: TokenData): boolean {
+    return this.matchesTenant(token) && token.accessToken !== this.rejectedAccessToken && this.isValid(token);
+  }
+
+  private matchesTenant(token: TokenData): boolean {
+    return this.baseUrl === undefined || token.tenantOrigin === this.baseUrl;
+  }
+
+  private sameToken(a: TokenData, b: TokenData): boolean {
+    return a.accessToken === b.accessToken && a.capturedAt === b.capturedAt &&
+      a.cookieHeader === b.cookieHeader && a.csrfToken === b.csrfToken && a.tenantOrigin === b.tenantOrigin;
+  }
+
+  private async afterConcurrentChange(): Promise<TokenData | null> {
+    this.cachedToken = await this.sessionStore.load();
+    if (this.cachedToken && this.isUsable(this.cachedToken)) return this.cachedToken;
+    throw new TokenRefreshError("saved authentication changed during refresh");
   }
 
   /**

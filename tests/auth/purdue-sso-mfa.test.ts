@@ -1,109 +1,113 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PurdueSSOFlow } from "../../src/auth/purdue-sso.js";
-import { BrowserAuthError } from "../../src/utils/errors.js";
+import { MfaApprovalError, UnsupportedAuthenticationError } from "../../src/auth/sso-flow.js";
 
-/**
- * Purdue's Entra tenant uses number matching: a two-digit number appears on
- * screen and has to be typed into Microsoft Authenticator. Nothing surfaces it
- * unless the MFA wait scrapes it, and a headless run has no screen at all, so
- * the sign-in simply cannot be completed without this.
- *
- * Entra re-mints the number when the user asks for a new request, so only a
- * CHANGED value is worth a line: repeating the same digits every two seconds
- * buries the log.
- */
-
+const BASE_URL = "https://purdue.brightspace.com";
 const SIGN_SELECTOR = "#idRichContext_DisplaySign";
 
-/** WARN lines the logger actually emitted, which it writes to stderr. */
+interface PollState {
+  number?: string;
+  challenge?: boolean;
+  kmsi?: boolean;
+  url?: string;
+  cookie?: boolean;
+  d2l?: boolean;
+}
+
 function captureWarnings() {
   const lines: string[] = [];
-  const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+  vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     const first = typeof args[0] === "string" ? args[0] : "";
     if (first.includes("[WARN]")) lines.push(first);
   });
-  return { lines, spy };
+  return lines;
 }
 
-/**
- * Fake Page whose number-match element yields the given values in turn. The
- * post-MFA redirect lands once the list is exhausted, which is what ends the
- * poll in a real run too.
- */
-function makeMfaPage(values: Array<string | null>) {
-  let reads = 0;
-  let arrive: () => void = () => {};
-  const redirect = new Promise<void>((resolve) => {
-    arrive = resolve;
+/** A sequence of page states driven by the same two-second poll as production. */
+function makeMfaPage(states: PollState[]) {
+  let poll = 0;
+  const yes = vi.fn(async () => {});
+  const current = () => states[Math.min(poll, states.length - 1)] ?? {};
+  const locatorTarget = (selector: string) => ({
+    isVisible: async () => {
+      if (selector === SIGN_SELECTOR) return current().number !== undefined;
+      if (selector === "#idDiv_SAOTCAS_Title" || selector === "#idDiv_SAOTCC_Title") return Boolean(current().challenge);
+      if (selector === "#KmsiCheckboxField" || selector === "#idSIButton9") return Boolean(current().kmsi);
+      return false;
+    },
+    textContent: async () => selector === SIGN_SELECTOR ? current().number ?? null : null,
+    click: yes,
   });
-
   const page = {
-    url: vi.fn(() => "https://login.microsoftonline.com/common/kmsi"),
-    waitForURL: vi.fn(() => redirect),
-    waitForTimeout: vi.fn(async () => {}),
-    locator: vi.fn((selector: string) => ({
-      first: () => ({
-        isVisible: async () => selector === SIGN_SELECTOR && reads < values.length,
-        textContent: async () => {
-          const value = values[reads];
-          reads += 1;
-          if (reads >= values.length) arrive();
-          return value;
-        },
-      }),
+    url: vi.fn(() => current().url ?? "https://login.microsoftonline.com/common/SAS/BeginAuth"),
+    locator: vi.fn((selector: string) => ({ first: () => locatorTarget(selector) })),
+    getByText: vi.fn(() => ({ first: () => ({ isVisible: async () => Boolean(current().kmsi) }) })),
+    context: vi.fn(() => ({
+      cookies: vi.fn(async () => current().cookie ? [{ name: "d2lSessionVal", value: "live" }] : []),
     })),
+    evaluate: vi.fn(async () => Boolean(current().d2l)),
+    waitForTimeout: vi.fn(async (milliseconds: number) => {
+      poll += 1;
+      vi.advanceTimersByTime(milliseconds);
+    }),
   };
-
-  return { page, reads: () => reads };
+  return { page, yes, poll: () => poll };
 }
 
-describe("PurdueSSOFlow.handleMFA number matching", () => {
+describe("Purdue MFA loop ported from Brightspace Bar", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-08T12:00:00Z"));
+  });
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
   const handleMFA = (page: unknown): Promise<void> =>
-    (new PurdueSSOFlow({}) as any).handleMFA(page);
+    (new PurdueSSOFlow({ baseUrl: BASE_URL }) as any).handleMFA(page);
 
-  it("logs the number match once per change, not once per poll", async () => {
-    const { lines } = captureWarnings();
-    const { page } = makeMfaPage(["42", "42", "73"]);
-
+  it("logs a number once per change and stops only at verified Brightspace home", async () => {
+    const lines = captureWarnings();
+    const { page } = makeMfaPage([
+      { number: "42", challenge: true },
+      { number: "42", challenge: true },
+      { number: "73", challenge: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
     await handleMFA(page);
-
-    const numbers = lines.filter((line) => line.includes("Number match:"));
+    const numbers = lines.filter(line => line.includes("Number match:"));
     expect(numbers).toHaveLength(2);
     expect(numbers[0]).toContain("Number match: 42.");
     expect(numbers[1]).toContain("Number match: 73.");
-    expect(numbers[0]).toContain("Microsoft Authenticator");
   });
 
-  it("stays quiet when the tenant shows no number", async () => {
-    const { lines } = captureWarnings();
-    const { page } = makeMfaPage([null, null]);
-
+  it("clicks Yes only on a proven stay-signed-in page", async () => {
+    const { page, yes } = makeMfaPage([
+      { kmsi: true, url: "https://login.microsoftonline.com/common/kmsi" },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
     await handleMFA(page);
-
-    expect(lines.filter((line) => line.includes("Number match:"))).toHaveLength(0);
+    expect(yes).toHaveBeenCalledOnce();
   });
 
-  it("reports the five-minute budget when MFA is never approved", async () => {
-    captureWarnings();
-    const page = {
-      url: vi.fn(() => "https://login.microsoftonline.com/common/kmsi"),
-      waitForURL: vi.fn(async () => {
-        throw new Error("Timeout 300000ms exceeded");
-      }),
-      waitForTimeout: vi.fn(async () => {}),
-      locator: vi.fn(() => ({
-        first: () => ({
-          isVisible: async () => false,
-          textContent: async () => null,
-        }),
-      })),
-    };
+  it("rejects the login shell even when it has a cookie and D2L.LP", async () => {
+    const { page, poll } = makeMfaPage([
+      { url: `${BASE_URL}/d2l/login`, cookie: true, d2l: true },
+      { url: `${BASE_URL}/d2l/home`, cookie: true, d2l: true },
+    ]);
+    await handleMFA(page);
+    expect(poll()).toBe(1);
+  });
 
-    await expect(handleMFA(page)).rejects.toBeInstanceOf(BrowserAuthError);
-    await expect(handleMFA(page)).rejects.toThrow(/5 minutes/);
+  it("classifies an observed challenge timeout as failed MFA", async () => {
+    captureWarnings();
+    const { page } = makeMfaPage([{ number: "18", challenge: true }]);
+    await expect(handleMFA(page)).rejects.toBeInstanceOf(MfaApprovalError);
+  });
+
+  it("classifies a timeout with no challenge as unsupported instead of failed MFA", async () => {
+    const { page } = makeMfaPage([{}]);
+    await expect(handleMFA(page)).rejects.toBeInstanceOf(UnsupportedAuthenticationError);
   });
 });

@@ -13,11 +13,33 @@ import { ApiError, RateLimitError, NetworkError } from "./errors.js";
 import { withRetry, isRetryableFailure, retryAfterMsFrom, type RetryConfig } from "./retry.js";
 import { log } from "../utils/logger.js";
 
-/**
- * The marker in the HTML stub a dead session gets instead of a payload. D2L
- * answers HTTP 200 on that path, so the status alone cannot detect it.
- */
-const EXPIRED_SESSION_MARKER = "sessionExpired=1";
+/** An ordinary course HTML link to the login page is not an expired session. */
+function isExpiredSessionRedirect(body: string, baseUrl: string): boolean {
+  const expiredTarget = (target: string): boolean => {
+    try {
+      const url = new URL(target.replace(/&amp;/gi, "&").replace(/\\\//g, "/"), baseUrl);
+      return url.origin === new URL(baseUrl).origin && url.pathname === "/d2l/login" &&
+        url.searchParams.get("sessionExpired") === "1";
+    } catch {
+      return false;
+    }
+  };
+  for (const script of body.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+    const redirect = /(?:(?:window|document)\s*\.\s*)?location\s*(?:\.\s*(?:replace|assign)\s*\(\s*|(?:\.\s*href\s*)?=\s*)(["'])(.*?)\1/g;
+    for (const match of script[1].matchAll(redirect)) {
+      if (expiredTarget(match[2])) return true;
+    }
+  }
+  for (const meta of body.matchAll(/<meta\b[^>]*>/gi)) {
+    const attributes = new Map(
+      [...meta[0].matchAll(/([\w-]+)\s*=\s*(["'])(.*?)\2/g)].map(match => [match[1].toLowerCase(), match[3]]),
+    );
+    if (attributes.get("http-equiv")?.toLowerCase() !== "refresh") continue;
+    const target = attributes.get("content")?.match(/^\s*\d+(?:\.\d+)?\s*;\s*url\s*=\s*(.*?)\s*$/i)?.[1];
+    if (target && expiredTarget(target)) return true;
+  }
+  return false;
+}
 
 /**
  * D2L API client with authentication, caching, rate limiting, and version discovery.
@@ -27,7 +49,7 @@ const EXPIRED_SESSION_MARKER = "sessionExpired=1";
  * - Supports both Bearer tokens and cookie-based auth (auto-detected via "cookie:" prefix)
  * - Client-side rate limiting using token bucket algorithm
  * - In-memory response caching with per-data-type TTLs
- * - 401 retry logic: retry once with fresh token, then clear and throw
+ * - 401 recovery: refresh the token before requesting browser authentication
  * - HTTPS-only enforcement
  * - Browser-like User-Agent for requests
  * - Raw response passthrough (no transformation)
@@ -123,27 +145,7 @@ export class D2LApiClient {
       return this.cache.get(path) as T;
     }
 
-    // Get authentication token, auto-reauth if expired
-    let token = await this.tokenManager.getToken();
-    if (!token) {
-      token = await this.tryAutoReauth(path);
-    }
-    const authed = token;
-
-    // Transient failures are retried inside the rate limiter, so every
-    // attempt pays for a bucket token and a retry storm cannot bypass it.
-    try {
-      return await this.retrying(() =>
-        this.throttled(() => this.makeRequest<T>(path, authed, options)),
-      );
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        // Final attempt: auto-reauth and retry once
-        const freshToken = await this.tryAutoReauth(path);
-        return await this.throttled(() => this.makeRequest<T>(path, freshToken, options));
-      }
-      throw error;
-    }
+    return this.withAuthentication(path, token => this.makeRequest<T>(path, token, options));
   }
 
   /**
@@ -157,25 +159,39 @@ export class D2LApiClient {
    * @throws NetworkError on network/fetch failures
    */
   async getRaw(path: string): Promise<Response> {
-    // Get authentication token, auto-reauth if expired
+    return this.withAuthentication(path, token => this.makeRawRequest(path, token));
+  }
+
+  /** One HTTP refresh and at most one browser login per caller. */
+  private async withAuthentication<T>(path: string, request: (token: TokenData) => Promise<T>): Promise<T> {
     let token = await this.tokenManager.getToken();
+    let authenticated = false;
     if (!token) {
       token = await this.tryAutoReauth(path);
+      authenticated = true;
     }
-    const authed = token;
-
+    const send = (current: TokenData) => this.retrying(() => this.throttled(() => request(current)));
     try {
-      return await this.retrying(() =>
-        this.throttled(() => this.makeRawRequest(path, authed)),
-      );
+      return await send(token);
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        // Final attempt: auto-reauth and retry once
-        const freshToken = await this.tryAutoReauth(path);
-        return await this.throttled(() => this.makeRawRequest(path, freshToken));
-      }
-      throw error;
+      if (!(error instanceof ApiError) || error.status !== 401) throw error;
+      if (authenticated) throw error;
     }
+
+    // A rejected JWT does not prove its underlying cookie is expired. Read a
+    // token written by another process or mint over HTTP before opening login.
+    // TokenRefreshError propagates here, so a temporary outage never starts MFA.
+    const fresh = await this.tokenManager.getToken(token.accessToken);
+    if (fresh && fresh.accessToken !== token.accessToken) {
+      try {
+        return await send(fresh);
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 401) throw error;
+      }
+    }
+
+    const loggedIn = await this.tryAutoReauth(path, fresh?.accessToken ?? token.accessToken);
+    return send(loggedIn);
   }
 
   /** One rate limiter token per attempt. */
@@ -197,12 +213,12 @@ export class D2LApiClient {
    * Attempt auto-reauthentication via the onAuthExpired callback.
    * If successful, returns the fresh token. Otherwise throws 401 ApiError.
    */
-  private async tryAutoReauth(path: string): Promise<TokenData> {
+  private async tryAutoReauth(path: string, rejectedAccessToken?: string): Promise<TokenData> {
     if (this.onAuthExpired) {
       log("INFO", "Attempting auto-reauthentication...");
       const success = await this.onAuthExpired();
       if (success) {
-        const freshToken = await this.tokenManager.getToken();
+        const freshToken = await this.tokenManager.getToken(rejectedAccessToken);
         if (freshToken) {
           log("INFO", "Auto-reauthentication succeeded, retrying request");
           return freshToken;
@@ -214,19 +230,18 @@ export class D2LApiClient {
   }
 
   /**
-   * Internal method to make HTTP request with 401 retry logic.
+   * Make one HTTP request. Authentication recovery is shared with raw downloads.
    */
   private async makeRequest<T>(
     path: string,
     token: TokenData,
     options?: { ttl?: number },
-    isRetry: boolean = false,
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
 
     try {
-      log("DEBUG", `${isRetry ? "Retrying" : "Requesting"} GET ${path}`);
+      log("DEBUG", `Requesting GET ${path}`);
 
       const response = await fetch(url, {
         method: "GET",
@@ -234,35 +249,9 @@ export class D2LApiClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
 
-      // Handle 401 with retry logic
+      // Preserve cookie material: a 401 only rejects this access token.
       if (response.status === 401) {
-        if (isRetry) {
-          // Second 401 - clear token and throw
-          log("DEBUG", "Second 401 response, clearing token");
-          await this.tokenManager.clearToken();
-          throw new ApiError(
-            401,
-            path,
-            "Session expired. Please re-authenticate via brightspace-auth.",
-          );
-        }
-
-        // First 401 - try to get fresher token
-        log("DEBUG", "First 401 response, attempting retry with fresh token");
-        const freshToken = await this.tokenManager.getToken();
-
-        if (!freshToken || freshToken.accessToken === token.accessToken) {
-          // No fresher token available
-          await this.tokenManager.clearToken();
-          throw new ApiError(
-            401,
-            path,
-            "Session expired. Please re-authenticate via brightspace-auth.",
-          );
-        }
-
-        // Retry with fresh token
-        return await this.makeRequest<T>(path, freshToken, options, true);
+        throw new ApiError(401, path, "Brightspace rejected the access token.");
       }
 
       // Handle 429 rate limiting
@@ -296,9 +285,8 @@ export class D2LApiClient {
       } catch {
         // Only now consider the stub: a real payload that merely mentions the
         // marker still parses, so it can never be misread as a dead session.
-        if (responseBody.includes(EXPIRED_SESSION_MARKER)) {
+        if (isExpiredSessionRedirect(responseBody, this.baseUrl)) {
           log("DEBUG", "Response carried the session-expired stub, treating it as a 401");
-          await this.tokenManager.clearToken();
           throw new ApiError(
             401,
             path,
@@ -338,18 +326,17 @@ export class D2LApiClient {
   }
 
   /**
-   * Internal method to make HTTP request for raw binary data with 401 retry logic.
+   * Make one HTTP request for raw binary data.
    */
   private async makeRawRequest(
     path: string,
     token: TokenData,
-    isRetry: boolean = false,
   ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const headers = this.buildAuthHeaders(token);
 
     try {
-      log("DEBUG", `${isRetry ? "Retrying" : "Requesting"} GET ${path} (raw)`);
+      log("DEBUG", `Requesting GET ${path} (raw)`);
 
       const response = await fetch(url, {
         method: "GET",
@@ -357,35 +344,9 @@ export class D2LApiClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
 
-      // Handle 401 with retry logic
+      // Preserve cookie material for the shared HTTP refresh path.
       if (response.status === 401) {
-        if (isRetry) {
-          // Second 401 - clear token and throw
-          log("DEBUG", "Second 401 response, clearing token");
-          await this.tokenManager.clearToken();
-          throw new ApiError(
-            401,
-            path,
-            "Session expired. Please re-authenticate via brightspace-auth.",
-          );
-        }
-
-        // First 401 - try to get fresher token
-        log("DEBUG", "First 401 response, attempting retry with fresh token");
-        const freshToken = await this.tokenManager.getToken();
-
-        if (!freshToken || freshToken.accessToken === token.accessToken) {
-          // No fresher token available
-          await this.tokenManager.clearToken();
-          throw new ApiError(
-            401,
-            path,
-            "Session expired. Please re-authenticate via brightspace-auth.",
-          );
-        }
-
-        // Retry with fresh token
-        return await this.makeRawRequest(path, freshToken, true);
+        throw new ApiError(401, path, "Brightspace rejected the access token.");
       }
 
       // Handle 429 rate limiting
@@ -420,9 +381,8 @@ export class D2LApiClient {
       const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
       if (contentType.startsWith("text/html")) {
         const body = await response.text();
-        if (body.includes(EXPIRED_SESSION_MARKER)) {
+        if (isExpiredSessionRedirect(body, this.baseUrl)) {
           log("DEBUG", "File download answered with the session-expired stub, treating it as a 401");
-          await this.tokenManager.clearToken();
           throw new ApiError(
             401,
             path,

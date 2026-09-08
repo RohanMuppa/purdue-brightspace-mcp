@@ -104,6 +104,29 @@ describe("mintAccessToken", () => {
     });
   });
 
+  it("treats a 401 as confirmed expiry", async () => {
+    const { fetchImpl } = stubFetch({ status: 401, body: "Unauthorized" });
+    expect(await mint(fetchImpl)).toEqual({ ok: false, reason: "sessionExpired" });
+  });
+
+  it("never treats an outage body as proof that the saved session expired", async () => {
+    const { fetchImpl } = stubFetch({ status: 503, body: "/d2l/login?sessionExpired=1" });
+    expect(await mint(fetchImpl)).toEqual({ ok: false, reason: "transport", detail: "HTTP 503" });
+  });
+
+  it("accepts a JSON payload that happens to mention the expiry marker", async () => {
+    const { fetchImpl } = stubFetch({ status: 200, body: JSON.stringify({
+      access_token: "jwt", description: "/d2l/login?sessionExpired=1",
+    }) });
+    expect(await mint(fetchImpl)).toEqual({ ok: true, accessToken: "jwt" });
+  });
+
+  it("does not follow redirects with session credentials", async () => {
+    const { fetchImpl, calls } = stubFetch({ status: 302, body: "" });
+    expect(await mint(fetchImpl)).toMatchObject({ ok: false, reason: "transport" });
+    expect(calls[0].init.redirect).toBe("manual");
+  });
+
   it("reports JSON without an access_token as a transport failure", async () => {
     const { fetchImpl } = stubFetch({
       status: 200,

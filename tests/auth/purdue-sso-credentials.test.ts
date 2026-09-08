@@ -1,124 +1,187 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PurdueSSOFlow } from "../../src/auth/purdue-sso.js";
-
-/**
- * Regression tests for enterCredentials() against Microsoft Entra ID.
- *
- * Shibboleth and CAS render the username and password boxes together and one
- * fill-fill-submit pass completes them. Entra looks the same to a selector but
- * is not: its account-name page carries a password box that Playwright reports
- * as visible, while the button only advances to the next view. Filling the
- * password there and pressing that button leaves the browser parked on the
- * sign-in page with both fields populated and nothing submitted, while the
- * flow moves on to wait for an MFA prompt that can never arrive.
- *
- * The button label is what separates the two: "Next" on the account-name page,
- * "Sign in" on the page that follows.
- */
+import { UnsupportedAuthenticationError } from "../../src/auth/sso-flow.js";
 
 const USERNAME = "student@example.edu";
-const PASSWORD = "hunter2";
+const PASSWORD = "dummy-password";
+const PURDUE = "https://purdue.brightspace.com";
 
-function makeField(visible: boolean, label = "") {
-  return {
-    fill: vi.fn(async () => {}),
-    isVisible: vi.fn(async () => visible),
-    click: vi.fn(async () => {}),
-    press: vi.fn(async () => {}),
-    evaluate: vi.fn(async (fn: (el: unknown) => unknown) =>
-      fn({ value: label, textContent: label }),
-    ),
-  };
+interface PageOptions {
+  emailSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
+  passwordDelayMs?: number;
+  missing?: "email" | "next" | "password" | "submit";
+  detachAfterNext?: boolean;
 }
 
-/**
- * Fake Page. With `entra`, it behaves like Microsoft's two-view form: a
- * password box and a "Next" button up front, replaced by a second password box
- * and a "Sign in" button once the account name is submitted.
- */
-function makePage(opts: { entra?: boolean; submitLabel?: string } = {}) {
-  const username = makeField(true);
-  const accountPassword = makeField(true);
-  const signInPassword = makeField(true);
-  const nextButton = makeField(true, "Next");
-  const signInButton = makeField(true, opts.submitLabel ?? "Sign in");
-  let advanced = false;
-
-  nextButton.click = vi.fn(async () => {
-    advanced = true;
-  });
-
-  const matches = (selector: string) => {
-    if (selector.includes("input#username")) return [username];
-    if (selector.includes("input#password")) {
-      if (!opts.entra) return [signInPassword];
-      return advanced ? [signInPassword] : [accountPassword];
-    }
-    if (selector.includes("_eventId_proceed")) {
-      if (!opts.entra) return [signInButton];
-      return [advanced ? signInButton : nextButton];
-    }
-    return [];
+/** Render each Entra stage independently, including a delayed password field. */
+function makePage(options: PageOptions = {}) {
+  let phase: "email" | "password" | "done" = "email";
+  let sinceNext = 0;
+  const actions: string[] = [];
+  const email = {
+    isVisible: vi.fn(async () => phase === "email" && options.missing !== "email"),
+    fill: vi.fn(async (_value: string) => { actions.push("email"); }),
   };
-
-  return {
-    fields: { username, accountPassword, signInPassword, nextButton, signInButton },
-    $: vi.fn(async (selector: string) => matches(selector)[0] ?? null),
-    $$: vi.fn(async (selector: string) => matches(selector)),
-    waitForSelector: vi.fn(async () => null),
-    waitForTimeout: vi.fn(async () => {}),
-    waitForLoadState: vi.fn(async () => {}),
+  const password = {
+    isVisible: vi.fn(async () => phase === "password" && sinceNext >= (options.passwordDelayMs ?? 0) && options.missing !== "password"),
+    fill: vi.fn(async (_value: string) => { actions.push("password"); }),
   };
+  const next = {
+    isVisible: vi.fn(async () => phase === "email" && options.missing !== "next"),
+    click: vi.fn(async () => {
+      actions.push("next");
+      phase = "password";
+      if (options.detachAfterNext) throw new Error("Element detached after navigation");
+    }),
+  };
+  const submit = {
+    isVisible: vi.fn(async () => phase === "password" && options.missing !== "submit"),
+    click: vi.fn(async () => { actions.push("submit"); phase = "done"; }),
+  };
+  const absent = {
+    isVisible: vi.fn(async () => false),
+    fill: vi.fn(async () => { throw new Error("Cannot fill an absent field"); }),
+    click: vi.fn(async () => { throw new Error("Cannot click an absent button"); }),
+  };
+  const page = {
+    locator: vi.fn((selector: string) => ({
+      first: () => {
+        if (selector === (options.emailSelector ?? "input[type=email]")) return email;
+        if (selector === (options.passwordSelector ?? "input[type=password]")) return password;
+        if (selector === (options.submitSelector ?? "#idSIButton9")) return phase === "email" ? next : submit;
+        return absent;
+      },
+    })),
+    waitForTimeout: vi.fn(async (milliseconds: number) => {
+      vi.advanceTimersByTime(milliseconds);
+      if (phase === "password") sinceNext += milliseconds;
+    }),
+  };
+  return { page, actions, email, password, next, submit };
 }
 
 const enterCredentials = (flow: PurdueSSOFlow, page: unknown): Promise<void> =>
   (flow as any).enterCredentials(page);
 
-describe("PurdueSSOFlow.enterCredentials", () => {
-  it("submits the account name before entering the password on Entra", async () => {
-    const page = makePage({ entra: true });
-    const flow = new PurdueSSOFlow({ username: USERNAME, password: PASSWORD });
+describe("PurdueSSOFlow credential choreography ported from Brightspace Bar", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-    await enterCredentials(flow, page);
-
-    expect(page.fields.username.fill).toHaveBeenCalledWith(USERNAME);
-    expect(page.fields.nextButton.click).toHaveBeenCalledOnce();
-    // The password belongs to the sign-in view, not the account-name page.
-    expect(page.fields.accountPassword.fill).not.toHaveBeenCalled();
-    expect(page.fields.signInPassword.fill).toHaveBeenCalledWith(PASSWORD);
-    expect(page.fields.signInButton.click).toHaveBeenCalledOnce();
+  it("performs email, Next, password, then submit in that order", async () => {
+    const form = makePage();
+    await enterCredentials(new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }), form.page);
+    expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+    expect(form.email.fill).toHaveBeenCalledWith(USERNAME);
+    expect(form.password.fill).toHaveBeenCalledWith(PASSWORD);
+    expect(form.next.click).toHaveBeenCalledOnce();
+    expect(form.submit.click).toHaveBeenCalledOnce();
   });
 
-  it("leaves single-page forms on their existing one-pass path", async () => {
-    const page = makePage({ submitLabel: "Log In" });
-    const flow = new PurdueSSOFlow({ username: USERNAME, password: PASSWORD });
-
-    await enterCredentials(flow, page);
-
-    expect(page.fields.username.fill).toHaveBeenCalledWith(USERNAME);
-    expect(page.fields.signInPassword.fill).toHaveBeenCalledWith(PASSWORD);
-    expect(page.fields.signInButton.click).toHaveBeenCalledOnce();
-    // No account-name hop: the button never said "Next".
-    expect(page.fields.nextButton.click).not.toHaveBeenCalled();
+  it("waits for the password field after Next changes before the field appears", async () => {
+    const form = makePage({ passwordDelayMs: 1000 });
+    await enterCredentials(new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }), form.page);
+    expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+    expect(form.page.waitForTimeout).toHaveBeenCalledTimes(4);
+    expect(form.page.waitForTimeout).toHaveBeenNthCalledWith(1, 250);
+    expect(form.password.fill).toHaveBeenCalledOnce();
   });
 
-  it("treats a button labelled Next as an account-name page whatever the case", async () => {
-    const page = makePage({ entra: true });
-    page.fields.nextButton.evaluate = vi.fn(async (fn: (el: unknown) => unknown) =>
-      fn({ value: "NEXT", textContent: "NEXT" }),
+  it("supports Microsoft's loginfmt and passwd field-name fallbacks", async () => {
+    const form = makePage({ emailSelector: "input[name=loginfmt]", passwordSelector: "input[name=passwd]" });
+    await enterCredentials(new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }), form.page);
+    expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+    expect(form.page.locator).toHaveBeenCalledWith("input[name=loginfmt]");
+    expect(form.page.locator).toHaveBeenCalledWith("input[name=passwd]");
+  });
+
+  it.each(["#idSIButton9", "input[type=submit]", "button[type=submit]"])(
+    "supports the %s submit selector without inspecting English button labels",
+    async (submitSelector) => {
+      const form = makePage({ submitSelector });
+      await enterCredentials(new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }), form.page);
+      expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+    },
+  );
+
+  it("expands a Purdue career account to its Microsoft sign-in name", async () => {
+    const form = makePage();
+    await enterCredentials(new PurdueSSOFlow({ username: "student", password: PASSWORD, baseUrl: PURDUE }), form.page);
+    expect(form.email.fill).toHaveBeenCalledWith("student@purdue.edu");
+  });
+
+  it("preserves an explicitly supplied full sign-in name", async () => {
+    const form = makePage();
+    await enterCredentials(new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }), form.page);
+    expect(form.email.fill).toHaveBeenCalledWith(USERNAME);
+  });
+
+  it("never appends Purdue's domain for another school", async () => {
+    const form = makePage();
+    await enterCredentials(new PurdueSSOFlow({ username: "student", password: PASSWORD, baseUrl: "https://school.example" }), form.page);
+    expect(form.email.fill).toHaveBeenCalledWith("student");
+  });
+
+  it.each([
+    ["email", [], "email field"],
+    ["next", ["email"], "email submit button"],
+    ["password", ["email", "next"], "password field"],
+    ["submit", ["email", "next", "password"], "password submit button"],
+  ] as const)("stops with a typed unsupported error when %s is missing", async (missing, actions, message) => {
+    const form = makePage({ missing });
+    const flow = new PurdueSSOFlow({ username: USERNAME, password: PASSWORD });
+    const attempt = enterCredentials(flow, form.page);
+    await expect(attempt).rejects.toBeInstanceOf(UnsupportedAuthenticationError);
+    await expect(attempt).rejects.toThrow(message);
+    expect(form.actions).toEqual(actions);
+    expect(form.page.waitForTimeout).toHaveBeenCalledTimes(120);
+  });
+
+  it("continues when the Next click detaches its button after navigating", async () => {
+    const form = makePage({ detachAfterNext: true });
+    await enterCredentials(new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }), form.page);
+    expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+  });
+
+  it("rejects missing saved credentials before interacting with the page", async () => {
+    const form = makePage();
+    await expect(enterCredentials(new PurdueSSOFlow({ username: USERNAME }), form.page)).rejects.toThrow("Password is required");
+    expect(form.actions).toEqual([]);
+    expect(form.page.locator).not.toHaveBeenCalled();
+  });
+});
+
+describe("Purdue campus routing ported from Brightspace Bar", () => {
+  it("clicks Purdue's live campus control instead of assuming its destination", async () => {
+    const click = vi.fn(async () => {});
+    const goto = vi.fn();
+    const page = {
+      url: () => "https://purdue.brightspace.com/d2l/login",
+      getByText: vi.fn(() => ({ first: () => ({ isVisible: async () => true, click }) })),
+      goto,
+    };
+
+    await new PurdueSSOFlow({ baseUrl: PURDUE }).prepareLogin(page as never);
+
+    expect(page.getByText).toHaveBeenCalledWith(/Purdue West Lafayette/i);
+    expect(click).toHaveBeenCalledOnce();
+    expect(goto).not.toHaveBeenCalled();
+  });
+
+  it("uses the known SAML endpoint only when the campus control is unavailable", async () => {
+    const goto = vi.fn(async () => {});
+    const page = {
+      url: () => "https://purdue.brightspace.com/d2l/login",
+      getByText: vi.fn(() => ({ first: () => ({ isVisible: async () => false }) })),
+      goto,
+    };
+
+    await new PurdueSSOFlow({ baseUrl: PURDUE }).prepareLogin(page as never);
+
+    expect(goto).toHaveBeenCalledWith(
+      "https://purdue.brightspace.com/d2l/lp/auth/saml/initiate-login?entityId=https://idp.purdue.edu/idp/shibboleth",
+      { waitUntil: "domcontentloaded", timeout: 30000 },
     );
-    const flow = new PurdueSSOFlow({ username: USERNAME, password: PASSWORD });
-
-    await enterCredentials(flow, page);
-
-    expect(page.fields.nextButton.click).toHaveBeenCalledOnce();
-    expect(page.fields.signInButton.click).toHaveBeenCalledOnce();
-  });
-
-  it("still rejects when no password is configured", async () => {
-    const page = makePage();
-    const flow = new PurdueSSOFlow({ username: USERNAME });
-
-    await expect(enterCredentials(flow, page)).rejects.toThrow(/Password is required/);
   });
 });

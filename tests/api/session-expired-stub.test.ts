@@ -96,14 +96,16 @@ describe("the session-expired stub", () => {
     await expect(client.get("/d2l/api/lp/1.62/users/whoami")).rejects.toBeInstanceOf(ApiError);
   });
 
-  it("clears the stored token so the next call re-authenticates", async () => {
+  it("forces token renewal without deleting shared session material", async () => {
     const tm = makeTokenManager(token("cookie:d2lSessionVal=dead"));
     const fetchMock = vi.fn();
     const client = await makeClient(tm, fetchMock);
+    const getToken = vi.spyOn(tm, "getToken");
     fetchMock.mockResolvedValue(ok(EXPIRED_STUB));
 
     await expect(client.get("/d2l/api/lp/1.62/users/whoami")).rejects.toThrow();
-    expect(await tm.getToken()).toBeNull();
+    expect(getToken).toHaveBeenCalledWith("cookie:d2lSessionVal=dead");
+    expect(tm.current?.accessToken).toBe("cookie:d2lSessionVal=dead");
   });
 
   it("triggers the auto-reauth callback when one is configured", async () => {

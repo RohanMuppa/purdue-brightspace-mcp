@@ -56,3 +56,11 @@ export class NetworkError extends AuthError {
     this.name = "NetworkError";
   }
 }
+
+/** A temporary token-mint failure must never start browser authentication. */
+export class TokenRefreshError extends NetworkError {
+  constructor(detail: string, cause?: Error) {
+    super(`Token refresh is temporarily unavailable: ${detail}. Your saved session was retained. Try again later.`, cause);
+    this.name = "TokenRefreshError";
+  }
+}

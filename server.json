@@ -6,12 +6,12 @@
     "url": "https://github.com/RohanMuppa/brightspace-mcp-server",
     "source": "github"
   },
-  "version": "1.6.3",
+  "version": "2.0.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "brightspace-mcp-server",
-      "version": "1.6.3",
+      "version": "2.0.0",
       "transport": {
         "type": "stdio"
       },
@@ -25,14 +25,14 @@
         },
         {
           "name": "D2L_SESSION_DIR",
-          "description": "Directory for the encrypted session and the browser profile. Default: ~/.d2l-session",
+          "description": "Local root for separate per-school/account directories containing encrypted tokens and browser storage. Encryption keys are kept in the native credential store. Default: ~/.d2l-session",
           "isRequired": false,
           "format": "filepath",
           "isSecret": false
         },
         {
           "name": "D2L_HEADLESS",
-          "description": "Run the silent session check without a window. Default: false. A real sign-in always opens a visible browser regardless, because the MFA number match has to be readable by a person.",
+          "description": "Deprecated compatibility setting. Authentication in v2 always runs headlessly. MFA number matches are printed in the terminal.",
           "isRequired": false,
           "format": "boolean",
           "isSecret": false

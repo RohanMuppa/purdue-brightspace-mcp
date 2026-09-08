@@ -6,7 +6,7 @@ Talk to your Brightspace courses with AI. Ask about grades, due dates, quizzes, 
 
 This is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that connects your AI to D2L Brightspace so it can pull your grades, assignments, syllabus, and course content on demand.
 
-Works with any school that uses D2L Brightspace, including Purdue, SUNY, USC, and hundreds more.
+Connects to D2L Brightspace. Automatic login supports Purdue's Microsoft Entra flow and SUNY campus selection. Other schools need a compatible automated sign-in flow; unsupported login pages return an actionable error.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/RohanMuppa/brightspace-mcp-server/main/docs/how-it-works.svg" alt="Architecture diagram" width="100%">
@@ -19,7 +19,7 @@ Works with any school that uses D2L Brightspace, including Purdue, SUNY, USC, an
 
 ## Install
 
-**You need:** [Node.js 18+](https://nodejs.org/) (download the current LTS, 20 or newer)
+**You need:** [Node.js 20+](https://nodejs.org/) and an available native credential store: macOS Keychain, Windows Credential Manager, or Linux Secret Service. Linux requires `secret-tool` and an unlocked desktop keyring. Install `libsecret-tools` on Debian/Ubuntu, or the package providing `secret-tool` on your distribution. A container or SSH session without Secret Service cannot persist authentication in v2.
 
 **Option 1: Let your AI do it**
 
@@ -50,7 +50,7 @@ you're at and skips SUNY's campus picker when you sign in:
 npx brightspace-mcp-server setup --suny
 ```
 
-The wizard walks you through login and MFA, auto configures Claude Desktop and Cursor, and prints the config to paste into ChatGPT Desktop if it is installed. Restart your AI client when it finishes.
+The wizard saves your password in the native credential store and runs login in a headless browser. At Purdue, approve Microsoft Authenticator using the number printed in the terminal. No browser window opens. The wizard can configure Claude Desktop and Cursor. Restart your AI client when it finishes.
 
 Any other D2L school: run `setup` without a flag and paste your Brightspace URL (for example `https://yourschool.brightspace.com`).
 
@@ -71,13 +71,29 @@ You still need to run `npx brightspace-mcp-server setup` first to save your cred
 
 ## Session Expired?
 
-You should rarely see this. Access tokens are re-minted from your saved session cookie in the background, with no browser, in about 200 ms. A browser only opens when the Brightspace session itself has ended. How long that takes is set by your school, not by this tool, and it has not been measured over a long enough stretch to quote a number here. If the automatic re-login fails, run:
+Returning the next day normally requires no action. The server renews short-lived API tokens over HTTPS using the saved Brightspace session. If that session ends, a headless browser restores your saved Microsoft session and tries silent SSO. If Microsoft requires sign-in, your saved credentials are entered automatically and you complete MFA on your phone.
+
+Your school's policy controls when MFA is required. There is no local 24-hour cutoff, and the server no longer discards browser state after one hour. A network outage preserves the saved session and returns a temporary error.
+
+If you miss an MFA request, automatic browser authentication waits four hours before trying again. Existing tokens and HTTP token renewal still work. Browser-based SSO also pauses because Microsoft can send another phone prompt during a redirect, even without a password submission. Run this command in a terminal to retry immediately and see the MFA number:
 
 ```bash
 npx brightspace-mcp-server auth
 ```
 
-**MFA at Purdue** is Microsoft Authenticator number matching: a two digit number appears in the browser and is also printed in the terminal. Enter it on your phone. Other schools may use Duo or their own app.
+**MFA at Purdue** is Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above if the number is not visible. Unsupported identity-provider pages require a supported sign-in handler; the server does not silently open a visible browser.
+
+## Upgrading to 2.0.0
+
+- Restart existing MCP processes after upgrading. v1 and v2 should not authenticate simultaneously against the same session directory.
+- Named accounts use separate directories below `~/.d2l-session/accounts/`, keyed by school and username. The first v2 login for a named account may require MFA because v1 browser state does not prove which username it belongs to. Switching accounts never replays another account's cookies.
+- On first use, the server moves a v1 config password into the native credential store, verifies it, then removes it from `config.json`. Tokens and browser storage migrate to authenticated encryption using a new random key in that store.
+- A locked or unavailable credential store stops migration and preserves existing files. Unlock it and retry. macOS may ask you to allow the Node executable to access Keychain.
+- After migration, the old storage snapshot is moved to Trash. After successful browser authentication, the inactive `browser-data` profile is also moved to Trash. Those legacy copies remain recoverable there; existing `.corrupted.*` backups are not automatically removed.
+- The server uses a fresh browser context for each authentication attempt. It saves only encrypted browser storage, with no permanent Chromium profile.
+- Keep `D2L_SESSION_DIR` on this computer's local filesystem. Sharing it through NFS or a network drive is unsupported; its encryption key belongs to this operating-system account.
+- `D2L_HEADLESS` remains recognized for compatibility; v2 authentication always runs headlessly. Environment-supplied passwords remain accepted as input and are saved in native secure storage. Remove old password values from your own `.env` or client configuration after migration.
+- If you change your password, run `setup` again. If the encryption key was deleted, restore the native credential entry or use a new session directory and authenticate. Unreadable saved sessions are preserved rather than silently replaced.
 
 ## What You Can Ask About
 
@@ -96,8 +112,9 @@ npx brightspace-mcp-server auth
 
 ## Security
 
-- Your username and password stay on your machine in `~/.brightspace-mcp/config.json`, readable only by your user (mode 0600). They are typed into your school's real login page and nowhere else.
-- Session tokens and cookies live in `~/.d2l-session/`, encrypted with AES-256-GCM.
+- Your school URL and username live in `~/.brightspace-mcp/config.json`. Your password lives in the native credential store. macOS and Windows use `@napi-rs/keyring`; Linux uses `secret-tool` directly to require Secret Service without a temporary kernel-key fallback. Linux secrets travel through stdin, never command-line arguments.
+- Each account directory stores `session.json` for access tokens and `storage-state.encrypted.json` for cookies and browser storage. Both use AES-256-GCM with a random key held in the native credential store. The application never writes new plaintext password or browser-state snapshots. `D2L_SESSION_DIR` changes the local root of these account directories.
+- On Unix, session files are mode 0600 and their directory is mode 0700. Security also depends on your operating-system account: software running as you may be able to access the same credential store. Runtime memory and recoverable v1 files in Trash are outside the encrypted-file guarantee.
 - All traffic to Brightspace is HTTPS.
 - On startup the server asks the npm registry whether a newer version exists. When running through `npx`, it clears this package's own stale npx cache directories so the next start downloads the new version. It never installs anything itself. Set `D2L_NO_UPDATE_CHECK=1` to turn the check off.
 - Read only: this server never submits, posts, or changes anything in Brightspace.
@@ -131,6 +148,16 @@ If you ever suspect you're on an old version (the auth banner prints the version
 ```bash
 npx clear-npx-cache
 ```
+
+## What's new in 2.0.0
+
+- Headless saved-credential login and terminal MFA, with silent session reuse across restarts.
+- Native secure credential storage and encrypted browser-state migration from v1.
+- Removed the one-hour browser-state cutoff and destructive profile recovery.
+- Process-level authentication coordination, failed-MFA cooldown, and transport errors that preserve your session.
+- Publishing waits for the test matrix on macOS, Windows, and Linux.
+
+Authentication recovery patterns were informed by [Brightspace Bar](https://github.com/DavidChen-006/Brightspace-Bar), distributed under the MIT license.
 
 ## What's new in 1.6.1
 

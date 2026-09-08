@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { BrowserAuth } from "../../src/auth/browser-auth.js";
+import { BrowserAuth, BrowserAuthTransportError } from "../../src/auth/browser-auth.js";
 import type { AppConfig } from "../../src/types/index.js";
 
 /**
@@ -122,7 +122,12 @@ describe("BrowserAuth.navigateAndLogin", () => {
     vi.useFakeTimers();
     auth = new BrowserAuth(makeConfig());
     ssoFlow = {
-      login: vi.fn(async () => true),
+      login: vi.fn(async (page: any) => {
+        page.context = () => ({ cookies: async () => LIVE_SESSION.cookies });
+        page.evaluate = async () => true;
+        page.url = () => `${BASE_URL}/d2l/home`;
+        return true;
+      }),
       manualLogin: vi.fn(async () => true),
       hasCredentials: vi.fn(() => true),
     };
@@ -141,24 +146,32 @@ describe("BrowserAuth.navigateAndLogin", () => {
     (auth as any).config = makeConfig(overrides);
   };
 
-  it("treats a valid session as authenticated when goto settles on an intermediate SAML hop", async () => {
+  it("waits for an intermediate SAML hop to reach the authenticated home page", async () => {
     const { page } = makePage({
       url: `${BASE_URL}/d2l/lp/auth/login/samlLogin.d2l`,
       ...LIVE_SESSION,
+      onTick: (state) => { state.url = `${BASE_URL}/d2l/home`; },
     });
 
     await expect(navigate(page)).resolves.toBe(true);
     expect(ssoFlow.login).not.toHaveBeenCalled();
     expect(ssoFlow.manualLogin).not.toHaveBeenCalled();
+    expect(page.waitForTimeout).toHaveBeenCalledOnce();
   });
 
-  it("still performs SSO login when the session never comes back to life", async () => {
+  it("does not accept the login shell even when it defines D2L.LP and stale cookies", async () => {
+    const { page } = makePage({ url: `${BASE_URL}/d2l/login`, ...LIVE_SESSION });
+    await expect(navigate(page)).rejects.toBeInstanceOf(BrowserAuthTransportError);
+    expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
+  it("returns a temporary failure when a SAML redirect remains inconclusive", async () => {
     const { page } = makePage({
       url: "https://sso.example.edu/idp/profile/SAML2/Redirect/SSO",
     });
 
-    await expect(navigate(page)).resolves.toBe(false);
-    expect(ssoFlow.login).toHaveBeenCalledOnce();
+    await expect(navigate(page)).rejects.toBeInstanceOf(BrowserAuthTransportError);
+    expect(ssoFlow.login).not.toHaveBeenCalled();
     // The whole 30s budget was spent before giving up.
     expect(page.waitForTimeout).toHaveBeenCalledTimes(30);
   });
@@ -180,8 +193,22 @@ describe("BrowserAuth.navigateAndLogin", () => {
       d2l: false,
     });
 
-    await expect(navigate(page)).resolves.toBe(false);
-    expect(ssoFlow.login).toHaveBeenCalledOnce();
+    await expect(navigate(page)).rejects.toBeInstanceOf(BrowserAuthTransportError);
+    expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
+  it("does not submit credentials after a browser cookie probe fails", async () => {
+    const { page } = makePage({ url: `${BASE_URL}/d2l/home`, visible: [EMAIL_SELECTOR] });
+    page.context = vi.fn(() => ({ cookies: vi.fn(async () => { throw new Error("Browser transport unavailable"); }) }));
+    await expect(navigate(page)).rejects.toBeInstanceOf(BrowserAuthTransportError);
+    expect(ssoFlow.login).not.toHaveBeenCalled();
+  });
+
+  it("does not submit credentials after a D2L JavaScript probe fails", async () => {
+    const { page } = makePage({ url: `${BASE_URL}/d2l/home`, ...LIVE_SESSION, visible: [EMAIL_SELECTOR] });
+    page.evaluate = vi.fn(async () => { throw new Error("Execution context unavailable"); });
+    await expect(navigate(page)).rejects.toBeInstanceOf(BrowserAuthTransportError);
+    expect(ssoFlow.login).not.toHaveBeenCalled();
   });
 
   it("gives up at once on a visible email field instead of burning the budget", async () => {
@@ -201,7 +228,8 @@ describe("BrowserAuth.navigateAndLogin", () => {
       visible: [KMSI_SUBMIT],
     });
 
-    await expect(navigate(page)).resolves.toBe(false);
+    await expect(navigate(page)).rejects.toBeInstanceOf(BrowserAuthTransportError);
+    expect(ssoFlow.login).not.toHaveBeenCalled();
     expect(clicks).toEqual([]);
   });
 
@@ -214,6 +242,7 @@ describe("BrowserAuth.navigateAndLogin", () => {
         state.visible = [];
         state.cookies = LIVE_SESSION.cookies;
         state.d2l = true;
+        state.url = `${BASE_URL}/d2l/home`;
       },
     });
 
@@ -229,6 +258,7 @@ describe("BrowserAuth.navigateAndLogin", () => {
         state.visible = [];
         state.cookies = LIVE_SESSION.cookies;
         state.d2l = true;
+        state.url = `${BASE_URL}/d2l/home`;
       },
     });
 
@@ -244,6 +274,7 @@ describe("BrowserAuth.navigateAndLogin", () => {
         state.visible = [];
         state.cookies = LIVE_SESSION.cookies;
         state.d2l = true;
+        state.url = `${BASE_URL}/d2l/home`;
       },
     });
 
@@ -260,6 +291,7 @@ describe("BrowserAuth.navigateAndLogin", () => {
         state.visible = [];
         state.cookies = LIVE_SESSION.cookies;
         state.d2l = true;
+        state.url = `${BASE_URL}/d2l/home`;
       },
     });
 

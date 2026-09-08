@@ -8,15 +8,32 @@ import type { Page } from "playwright";
 import type { AppConfig } from "../types/index.js";
 import { PurdueSSOFlow } from "./purdue-sso.js";
 import { SunySSOFlow, isSunyBrightspace } from "./suny-sso.js";
+import { BrowserAuthError } from "../utils/errors.js";
+
+export class UnsupportedAuthenticationError extends BrowserAuthError {
+  readonly code = "AUTH_UNSUPPORTED";
+  constructor(message: string, cause?: Error) {
+    super(message, "headless_login", cause);
+    this.name = "UnsupportedAuthenticationError";
+  }
+}
+
+export class MfaApprovalError extends BrowserAuthError {
+  readonly code = "AUTH_MFA_FAILED";
+  constructor(cause?: Error) {
+    super("MFA approval failed or timed out after 5 minutes. Run brightspace-auth to retry.", "mfa_approval", cause);
+    this.name = "MfaApprovalError";
+  }
+}
 
 /** The browser login sequence for one institution's identity provider. */
 export interface SSOFlow {
+  /** Pass known school and campus selectors without entering credentials. */
+  prepareLogin?(page: Page): Promise<void>;
   /** True when saved credentials allow an automated sign-in attempt. */
   hasCredentials(): boolean;
-  /** Drive the sign-in form. Resolves false on timeout so the caller can fall back. */
+  /** Drive the supported headless sign-in form, surfacing MFA in terminal logs. */
   login(page: Page): Promise<boolean>;
-  /** Wait for the user to sign in themselves in a visible browser. */
-  manualLogin(page: Page): Promise<boolean>;
 }
 
 /**
@@ -26,7 +43,7 @@ export interface SSOFlow {
  * CAS, and Microsoft Entra forms.
  */
 export function createSSOFlow(config: AppConfig): SSOFlow {
-  const credentials = { username: config.username, password: config.password };
+  const credentials = { username: config.username, password: config.password, baseUrl: config.baseUrl };
 
   if (isSunyBrightspace(config.baseUrl)) {
     return new SunySSOFlow({ ...credentials, campus: config.campus });

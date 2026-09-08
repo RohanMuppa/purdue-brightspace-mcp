@@ -7,6 +7,8 @@
 // Token data captured from browser interception
 export interface TokenData {
   accessToken: string;
+  /** Exact HTTPS school origin. Missing only on legacy sessions awaiting validation. */
+  tenantOrigin?: string;
   capturedAt: number; // Unix timestamp ms
   expiresAt: number; // Unix timestamp ms
   source: "browser" | "cache";
@@ -39,6 +41,10 @@ export interface SessionFile {
 export interface AppConfig {
   baseUrl: string;
   sessionDir: string;
+  /** Configured local root containing separate per-school/account session directories. */
+  sessionRoot?: string;
+  /** This run verified encrypted legacy browser state before optional profile retirement. */
+  legacyBrowserStateMigrated?: boolean;
   tokenTtl: number; // seconds
   headless: boolean;
   username?: string;

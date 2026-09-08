@@ -155,7 +155,45 @@ describe("D2LApiClient resilience", () => {
   });
 
   describe("the session-expired stub on downloads", () => {
-    it("is treated as a 401 and clears the token", async () => {
+    it("returns ordinary HTML containing an expired-login link without refreshing authentication", async () => {
+      const tm = tokenManager();
+      const getToken = vi.spyOn(tm, "getToken");
+      const c = await client(tm);
+      const body = '<html><body><a href="/d2l/login?sessionExpired=1">Login help</a></body></html>';
+      fetchMock.mockResolvedValueOnce(new Response(body, { headers: { "content-type": "text/html" } }));
+
+      const result = await c.getRaw("/d2l/api/le/1.96/1/content/topics/9/file");
+
+      expect(await result.text()).toBe(body);
+      expect(getToken).toHaveBeenCalledTimes(1);
+      expect(getToken).toHaveBeenCalledWith();
+      expect(tm.cleared).toBe(0);
+    });
+
+    it.each([
+      '<script>location="/d2l/login?sessionExpired=1";</script>',
+      '<script>window.location.href="/d2l/login?sessionExpired=1";</script>',
+      '<script>window.location.replace("/d2l/login?sessionExpired=1");</script>',
+      '<meta http-equiv="refresh" content="0;url=/d2l/login?sessionExpired=1">',
+    ])("recognizes an actual login redirect in HTML: %s", async body => {
+      const tm = tokenManager();
+      const getToken = vi.spyOn(tm, "getToken");
+      const c = await client(tm);
+      fetchMock.mockResolvedValue(new Response(body, { headers: { "content-type": "text/html" } }));
+
+      await expect(c.getRaw("/d2l/api/le/1.96/1/content/topics/9/file")).rejects.toMatchObject({ status: 401 });
+      expect(getToken).toHaveBeenCalledWith("bearer-jwt");
+    });
+
+    it("does not treat a redirect to another site as proof the school session expired", async () => {
+      const tm = tokenManager();
+      const c = await client(tm);
+      const body = '<script>window.location.replace("https://another.example/d2l/login?sessionExpired=1");</script>';
+      fetchMock.mockResolvedValueOnce(new Response(body, { headers: { "content-type": "text/html" } }));
+      expect(await (await c.getRaw("/d2l/api/le/1.96/1/content/topics/9/file")).text()).toBe(body);
+    });
+
+    it("is treated as a 401 without deleting shared session material", async () => {
       const tm = tokenManager();
       const c = await client(tm, { maxAttempts: 1 });
       fetchMock.mockResolvedValue({
@@ -169,7 +207,7 @@ describe("D2LApiClient resilience", () => {
       await expect(c.getRaw("/d2l/api/le/1.96/1/content/topics/9/file")).rejects.toMatchObject({
         status: 401,
       });
-      expect(tm.cleared).toBeGreaterThan(0);
+      expect(tm.cleared).toBe(0);
     });
 
     it("leaves a real binary download untouched and unbuffered", async () => {

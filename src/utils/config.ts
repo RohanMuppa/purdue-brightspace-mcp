@@ -6,10 +6,15 @@
 
 import * as path from "node:path";
 import * as os from "node:os";
+import { createHash } from "node:crypto";
+import dotenv from "dotenv";
 import type { AppConfig } from "../types/index.js";
 import { configStoreExists, loadConfigStore } from "./config-store.js";
+import { resolveStoredPassword } from "./secure-config.js";
+import { migrateLegacyState } from "../auth/legacy-state.js";
 
-export function loadConfig(): AppConfig {
+export async function loadConfig(): Promise<AppConfig> {
+  dotenv.config({ quiet: true });
   const store = configStoreExists() ? loadConfigStore() : null;
 
   if (store) {
@@ -19,17 +24,14 @@ export function loadConfig(): AppConfig {
   }
 
   // Resolve sessionDir: env > store > default
-  const sessionDir = process.env.D2L_SESSION_DIR
+  const sessionRoot = process.env.D2L_SESSION_DIR
     ? expandTilde(process.env.D2L_SESSION_DIR)
     : store?.sessionDir
       ? expandTilde(store.sessionDir)
       : path.join(os.homedir(), ".d2l-session");
 
-  // Resolve headless: env > store > default (false)
-  let headless = store?.headless ?? false;
-  if (process.env.D2L_HEADLESS !== undefined) {
-    headless = process.env.D2L_HEADLESS === "true";
-  }
+  // Authentication always runs without a visible browser in v2.
+  const headless = true;
 
   // Resolve tokenTtl: env > store > default (3600)
   const tokenTtl = process.env.D2L_TOKEN_TTL
@@ -52,13 +54,26 @@ export function loadConfig(): AppConfig {
     activeOnly = process.env.D2L_ACTIVE_ONLY !== 'false';
   }
 
+  const configuredUrl = new URL(process.env.D2L_BASE_URL || store?.baseUrl || "https://purdue.brightspace.com");
+  if (configuredUrl.protocol !== "https:" || configuredUrl.username || configuredUrl.password) {
+    throw new Error("The Brightspace URL must be an HTTPS school URL without embedded credentials.");
+  }
+  const baseUrl = configuredUrl.origin;
+  const username = process.env.D2L_USERNAME || store?.username;
+  const password = await resolveStoredPassword(baseUrl, username, store);
+  // A new account must never inherit another account's cookies, even at the same school.
+  const sessionDir = accountSessionDirectory(sessionRoot, baseUrl, username);
+  const legacyMigration = sessionDir !== sessionRoot ? await migrateLegacyState(sessionRoot) : undefined;
+
   return {
-    baseUrl: process.env.D2L_BASE_URL || store?.baseUrl || "https://purdue.brightspace.com",
+    baseUrl,
     sessionDir,
+    sessionRoot,
+    legacyBrowserStateMigrated: legacyMigration?.browserState === "encrypted",
     tokenTtl,
     headless,
-    username: process.env.D2L_USERNAME || store?.username,
-    password: process.env.D2L_PASSWORD || store?.password,
+    username,
+    password,
     campus: process.env.D2L_CAMPUS || store?.campus,
     courseFilter: {
       includeCourseIds,
@@ -66,6 +81,12 @@ export function loadConfig(): AppConfig {
       activeOnly,
     },
   };
+}
+
+export function accountSessionDirectory(root: string, baseUrl: string, username?: string): string {
+  if (!username) return root;
+  const account = createHash("sha256").update(JSON.stringify([new URL(baseUrl).origin, username])).digest("hex");
+  return path.join(root, "accounts", account);
 }
 
 function expandTilde(filePath: string): string {

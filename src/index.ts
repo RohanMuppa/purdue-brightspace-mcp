@@ -64,7 +64,7 @@ if (subcommand === 'setup') {
   async function main(): Promise<void> {
     try {
       // Load configuration
-      const config = loadConfig();
+      const config = await loadConfig();
       log("DEBUG", "Configuration loaded", { sessionDir: config.sessionDir });
 
       // Create MCP server instance
@@ -72,7 +72,7 @@ if (subcommand === 'setup') {
         name: "brightspace",
         version: PKG_VERSION,
         description: "Brightspace MCP Server — by Rohan Muppa (github.com/rohanmuppa/brightspace-mcp-server)",
-      });
+      }, { capabilities: { logging: {} } });
       log("INFO", "");
       log("INFO", "========================================");
       log("INFO", `  Brightspace MCP Server v${PKG_VERSION}`);
@@ -89,7 +89,11 @@ if (subcommand === 'setup') {
       });
 
       // Create AuthRunner for auto-reauthentication
-      const authRunner = new AuthRunner();
+      const authRunner = new AuthRunner({
+        onProgress: (message) => {
+          void server.sendLoggingMessage({ level: "info", logger: "brightspace-auth", data: message }).catch(() => {});
+        },
+      });
 
       // Create D2L API Client with auto-reauth support
       const apiClient = new D2LApiClient({
@@ -143,7 +147,7 @@ if (subcommand === 'setup') {
                   type: "text",
                   text: "Not authenticated. Auto-reauthentication was attempted but failed. " +
                     "Please run `brightspace-auth` manually in your terminal to log in. " +
-                    "Make sure your credentials in .env are correct and your internet connection is stable.",
+                    "Run setup to update your saved credentials, and check your internet connection.",
                 },
               ];
               const notice = getUpdateNotice();

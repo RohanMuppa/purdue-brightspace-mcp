@@ -223,7 +223,7 @@ describe("D2LApiClient", () => {
   });
 
   describe("get() - User-Agent header", () => {
-    it("should send browser-like User-Agent header", async () => {
+    it("should identify BrightspaceMCP in authenticated requests", async () => {
       const client = new D2LApiClient({
         baseUrl: "https://purdue.brightspace.com",
         tokenManager: mockTokenManager,
@@ -254,10 +254,10 @@ describe("D2LApiClient", () => {
 
       // Verify User-Agent
       expect(mockFetch).toHaveBeenCalledWith(
-        expect.any(String),
+        "https://purdue.brightspace.com/d2l/api/lp/1.56/users/whoami",
         expect.objectContaining({
           headers: expect.objectContaining({
-            "User-Agent": expect.stringContaining("Chrome/131.0.0.0"),
+            "User-Agent": expect.stringContaining("BrightspaceMCP"),
           }),
         }),
       );
@@ -413,7 +413,7 @@ describe("D2LApiClient", () => {
       expect(mockFetch).toHaveBeenCalledTimes(3); // 1 init + 1 fail + 1 success
     });
 
-    it("should clear token and throw after second 401", async () => {
+    it("should preserve session material when the API rejects a token", async () => {
       const client = new D2LApiClient({
         baseUrl: "https://purdue.brightspace.com",
         tokenManager: mockTokenManager,
@@ -447,8 +447,8 @@ describe("D2LApiClient", () => {
         client.get("/d2l/api/lp/1.56/users/whoami"),
       ).rejects.toThrow(ApiError);
 
-      // Token should be cleared
-      expect(await mockTokenManager.getToken()).toBeNull();
+      // The mint endpoint, not an individual resource, decides cookie expiry.
+      expect(await mockTokenManager.getToken()).not.toBeNull();
     });
   });
 

@@ -95,21 +95,21 @@ describe("SunySSOFlow.selectCampus", () => {
     expect(page.click).toHaveBeenCalledOnce();
   });
 
-  it("leaves the page alone when no campus is configured", async () => {
+  it("reports missing campus configuration instead of waiting for invisible input", async () => {
     const page = makePage(IDM_URL);
     const flow = new SunySSOFlow({});
 
-    await selectCampus(flow, page);
+    await expect(selectCampus(flow, page)).rejects.toThrow("No SUNY campus configured");
 
     expect(page.selectOption).not.toHaveBeenCalled();
     expect(page.click).not.toHaveBeenCalled();
   });
 
-  it("leaves the page alone when the configured campus matches nothing", async () => {
+  it("reports a campus that matches nothing", async () => {
     const page = makePage(IDM_URL);
     const flow = new SunySSOFlow({ campus: "Nowhere University" });
 
-    await selectCampus(flow, page);
+    await expect(selectCampus(flow, page)).rejects.toThrow("did not match SUNY");
 
     expect(page.selectOption).not.toHaveBeenCalled();
   });
@@ -118,7 +118,7 @@ describe("SunySSOFlow.selectCampus", () => {
     const page = makePage(IDM_URL);
     const flow = new SunySSOFlow({ campus: "Select Campus..." });
 
-    await selectCampus(flow, page);
+    await expect(selectCampus(flow, page)).rejects.toThrow("did not match SUNY");
 
     expect(page.selectOption).not.toHaveBeenCalled();
   });

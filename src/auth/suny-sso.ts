@@ -1,12 +1,13 @@
 /**
  * Brightspace MCP Server
  * Copyright (c) 2026 Rohan Muppa. All rights reserved.
- * Licensed under MIT — see LICENSE file for details.
+ * Licensed under MIT : see LICENSE file for details.
  */
 
 import type { Page } from "playwright";
 import { PurdueSSOFlow } from "./purdue-sso.js";
 import { log } from "../utils/logger.js";
+import { UnsupportedAuthenticationError } from "./sso-flow.js";
 
 /** SUNY campuses share one Brightspace tenant behind one Shibboleth IdP. */
 const SUNY_BRIGHTSPACE_HOST = "mylearning.suny.edu";
@@ -69,6 +70,7 @@ export class SunySSOFlow {
     this.defaultFlow = new PurdueSSOFlow({
       username: config.username,
       password: config.password,
+      baseUrl: `https://${SUNY_BRIGHTSPACE_HOST}`,
     });
   }
 
@@ -76,27 +78,19 @@ export class SunySSOFlow {
     return this.defaultFlow.hasCredentials();
   }
 
+  async prepareLogin(page: Page): Promise<void> {
+    await this.startSamlLogin(page);
+    await this.selectCampus(page);
+  }
+
   async login(page: Page): Promise<boolean> {
     try {
       await this.startSamlLogin(page);
       await this.selectCampus(page);
     } catch (error) {
-      log("ERROR", "SUNY campus selection failed", error);
-      return false;
+      throw new UnsupportedAuthenticationError("SUNY campus selection could not complete headlessly. Run brightspace-mcp-server setup --suny and select a campus.", error as Error);
     }
     return this.defaultFlow.login(page);
-  }
-
-  async manualLogin(page: Page): Promise<boolean> {
-    try {
-      // Clear the shadow-DOM selector and, when configured, the campus
-      // dropdown, so the user lands directly on their campus sign-in page.
-      await this.startSamlLogin(page);
-      await this.selectCampus(page);
-    } catch (error) {
-      log("DEBUG", "Could not pre-fill SUNY campus selection", error);
-    }
-    return this.defaultFlow.manualLogin(page);
   }
 
   /**
@@ -108,7 +102,7 @@ export class SunySSOFlow {
     if (!currentUrl.includes("/d2l/login")) return;
 
     const origin = new URL(currentUrl).origin;
-    log("INFO", "Campus selector detected — navigating directly to SUNY's SAML endpoint");
+    log("INFO", "Campus selector detected : navigating directly to SUNY's SAML endpoint");
     await page.goto(
       `${origin}/d2l/lp/auth/saml/initiate-login?entityId=${SUNY_IDP_ENTITY_ID}`,
       { waitUntil: "domcontentloaded", timeout: 30000 }
@@ -127,7 +121,7 @@ export class SunySSOFlow {
       // seconds to appear even on a fast connection.
       await page.waitForSelector(SELECTORS.campusSelect, { timeout: 45000 });
     } catch {
-      log("DEBUG", "No SUNY campus dropdown found — continuing to the sign-in form");
+      log("DEBUG", "No SUNY campus dropdown found : continuing to the sign-in form");
       return;
     }
 
@@ -141,17 +135,12 @@ export class SunySSOFlow {
     );
 
     if (!this.config.campus) {
-      log("WARN", "No campus configured — choose your campus in the browser window.");
-      log("INFO", "Set one with: brightspace-mcp-server setup --suny");
-      return;
+      throw new UnsupportedAuthenticationError("No SUNY campus configured. Run brightspace-mcp-server setup --suny.");
     }
 
     const match = this.findCampus(options);
     if (!match) {
-      log("WARN", `Campus "${this.config.campus}" did not match any SUNY campus.`);
-      log("INFO", `Available: ${options.map((o) => o.label).join(", ")}`);
-      log("WARN", "Choose your campus in the browser window to continue.");
-      return;
+      throw new UnsupportedAuthenticationError(`Configured campus did not match SUNY. Available campuses: ${options.map((o) => o.label).join(", ")}`);
     }
 
     log("INFO", `Selecting campus ${match.label} (${match.value})`);

@@ -13,7 +13,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { saveConfigStore, getConfigStorePath } from "./utils/config-store.js";
+import { getConfigStorePath } from "./utils/config-store.js";
+import { saveSecureConfig } from "./utils/secure-config.js";
 import type { ConfigStoreData } from "./utils/config-store.js";
 
 // ANSI helpers
@@ -41,8 +42,8 @@ const SCHOOL_PRESETS: Record<string, SchoolPreset> = {
   purdue: {
     name: "Purdue University",
     baseUrl: "https://purdue.brightspace.com",
-    usernameLabel: "Purdue career account username",
-    mfaNote: "Approve the sign-in in Microsoft Authenticator. If it asks for a number, it is shown in the browser and printed here.",
+    usernameLabel: "Purdue career account username or full email",
+    mfaNote: "Approve the sign-in in Microsoft Authenticator. The number is printed here; no browser window opens.",
   },
   suny: {
     name: "SUNY",
@@ -163,7 +164,7 @@ function normalizeUrl(input: string): string {
 function isValidUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "https:";
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password;
   } catch {
     return false;
   }
@@ -268,7 +269,7 @@ function runAuth(): Promise<boolean> {
       process.execPath,
       [scriptPath],
       {
-        timeout: 3 * 60 * 1000,
+        timeout: 8 * 60 * 1000,
         env: { ...process.env },
       },
       (error) => {
@@ -333,11 +334,14 @@ async function main(): Promise<void> {
   let campus = "";
   if (preset?.campusPrompt) {
     console.log(dim("  Several campuses share this Brightspace site."));
-    campus = await ask(rl, `${preset.campusPrompt} `);
+    while (!campus) {
+      campus = await ask(rl, `${preset.campusPrompt} `);
+      if (!campus) console.log(yellow("  Campus is required for automatic sign-in."));
+    }
     console.log(
       campus
         ? dim(`  → ${campus}`)
-        : dim("  No campus set — you'll pick it in the browser at sign-in."),
+        : dim("  Set your campus before authenticating."),
     );
     console.log("");
   }
@@ -398,7 +402,8 @@ async function main(): Promise<void> {
     config.campus = campus;
   }
 
-  saveConfigStore(config);
+  await saveSecureConfig(config);
+  console.log(green("  Password saved in your operating system credential store."));
   console.log(green("  Config saved to: " + getConfigStorePath()));
   console.log("");
 
