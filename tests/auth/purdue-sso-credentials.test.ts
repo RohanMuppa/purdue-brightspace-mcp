@@ -88,6 +88,18 @@ describe("PurdueSSOFlow credential choreography ported from Brightspace Bar", ()
     expect(form.password.fill).toHaveBeenCalledOnce();
   });
 
+  it("can submit only the public account name before deciding whether a password is needed", async () => {
+    const form = makePage({ passwordDelayMs: 500 });
+    const flow = new PurdueSSOFlow({ username: "student", password: PASSWORD, baseUrl: PURDUE });
+
+    await expect(flow.identifyAccount(form.page as never)).resolves.toBe(true);
+    expect(form.actions).toEqual(["email", "next"]);
+    expect(form.email.fill).toHaveBeenCalledWith("student@purdue.edu");
+
+    await enterCredentials(flow, form.page);
+    expect(form.actions).toEqual(["email", "next", "password", "submit"]);
+  });
+
   it("supports Microsoft's loginfmt and passwd field-name fallbacks", async () => {
     const form = makePage({ emailSelector: "input[name=loginfmt]", passwordSelector: "input[name=passwd]" });
     await enterCredentials(new PurdueSSOFlow({ username: USERNAME, password: PASSWORD }), form.page);

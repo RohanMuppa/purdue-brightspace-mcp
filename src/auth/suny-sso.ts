@@ -83,6 +83,10 @@ export class SunySSOFlow {
     await this.selectCampus(page);
   }
 
+  async identifyAccount(page: Page): Promise<boolean> {
+    return this.defaultFlow.identifyAccount(page);
+  }
+
   async login(page: Page): Promise<boolean> {
     try {
       await this.startSamlLogin(page);

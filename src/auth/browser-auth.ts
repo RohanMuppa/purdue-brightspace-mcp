@@ -285,15 +285,42 @@ export class BrowserAuth {
    */
   private async awaitSilentSSO(page: Page): Promise<boolean> {
     const deadline = Date.now() + SILENT_SSO_TIMEOUT_MS;
+    let accountHintAttempted = false;
+    let passwordPromptPolls = 0;
     do {
       if (await this.hasLiveSession(page)) return true;
 
       // Only a visible supported challenge justifies entering credentials or
       // waiting for MFA. A stalled redirect is not proof of session expiry.
-      if (await this.hasCredentialPrompt(page) || await this.isOnScreen(page, SILENT_SSO.mfaChallenge)) {
+      if (await this.isOnScreen(page, SILENT_SSO.emailField)) {
+        if (!accountHintAttempted && this.ssoFlow.identifyAccount) {
+          accountHintAttempted = true;
+          if (await this.ssoFlow.identifyAccount(page)) {
+            log("DEBUG", "Submitted the configured account name to resume saved SSO");
+            await page.waitForTimeout(SILENT_SSO_POLL_MS);
+            continue;
+          }
+        }
+        log("INFO", "The identity provider requires an account login");
+        return false;
+      }
+      if (await this.isOnScreen(page, SILENT_SSO.mfaChallenge)) {
         log("INFO", "The identity provider requires a login challenge");
         return false;
       }
+      if (await this.isOnScreen(page, SILENT_SSO.credentialField)) {
+        passwordPromptPolls += 1;
+        // Entra can briefly expose a password-shaped control while its email
+        // view initializes. Brightspace Bar polls the evolving page instead of
+        // concluding from that first transient snapshot.
+        if (passwordPromptPolls >= 2) {
+          log("INFO", "The identity provider requires a login challenge");
+          return false;
+        }
+        await page.waitForTimeout(SILENT_SSO_POLL_MS);
+        continue;
+      }
+      passwordPromptPolls = 0;
 
       try {
         await this.clickSilentSurfaces(page);

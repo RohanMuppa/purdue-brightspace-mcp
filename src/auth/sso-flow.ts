@@ -30,6 +30,8 @@ export class MfaApprovalError extends BrowserAuthError {
 export interface SSOFlow {
   /** Pass known school and campus selectors without entering credentials. */
   prepareLogin?(page: Page): Promise<void>;
+  /** Submit only the public account name so a saved IdP session can resume. */
+  identifyAccount?(page: Page): Promise<boolean>;
   /** True when saved credentials allow an automated sign-in attempt. */
   hasCredentials(): boolean;
   /** Drive the supported headless sign-in form, surfacing MFA in terminal logs. */

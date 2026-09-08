@@ -43,6 +43,7 @@ function signInName(username: string, baseUrl?: string): string {
 
 export class PurdueSSOFlow {
   private config: PurdueSSOConfig;
+  private accountHintSubmitted = false;
 
   constructor(config: PurdueSSOConfig) {
     this.config = config;
@@ -57,6 +58,16 @@ export class PurdueSSOFlow {
 
   async prepareLogin(page: Page): Promise<void> {
     await this.handleCampusSelector(page);
+  }
+
+  /** First half of Brightspace Bar's choreography, with no password access. */
+  async identifyAccount(page: Page): Promise<boolean> {
+    if (!this.config.username) return false;
+    const email = signInName(this.config.username, this.config.baseUrl);
+    if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) return false;
+    if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) return false;
+    this.accountHintSubmitted = true;
+    return true;
   }
 
   /**
@@ -118,13 +129,16 @@ export class PurdueSSOFlow {
     if (!this.config.password) throw new BrowserAuthError("Password is required for SSO login", "credentials");
 
     log("INFO", "Entering credentials");
-    const email = signInName(this.config.username, this.config.baseUrl);
-    if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) {
-      throw new UnsupportedAuthenticationError("The Microsoft email field did not appear. Headless sign-in cannot continue.");
+    if (!this.accountHintSubmitted) {
+      const email = signInName(this.config.username, this.config.baseUrl);
+      if (!await this.fillWhenReady(page, EMAIL_SELECTORS, email)) {
+        throw new UnsupportedAuthenticationError("The Microsoft email field did not appear. Headless sign-in cannot continue.");
+      }
+      if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
+        throw new UnsupportedAuthenticationError("The Microsoft email submit button did not appear. Headless sign-in cannot continue.");
+      }
     }
-    if (!await this.clickWhenReady(page, SUBMIT_SELECTORS)) {
-      throw new UnsupportedAuthenticationError("The Microsoft email submit button did not appear. Headless sign-in cannot continue.");
-    }
+    this.accountHintSubmitted = false;
     if (!await this.fillWhenReady(page, PASSWORD_SELECTORS, this.config.password)) {
       throw new UnsupportedAuthenticationError("The Microsoft password field did not appear. Headless sign-in cannot continue.");
     }
