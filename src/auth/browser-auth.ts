@@ -19,10 +19,11 @@ import { mintAccessToken } from "./token-mint.js";
 
 const SILENT_SSO_TIMEOUT_MS = 30000;
 const SILENT_SSO_POLL_MS = 1000;
+const INITIAL_NAVIGATION_TIMEOUT_MS = 60000;
 const SILENT_SSO = {
-  emailField: "input[type=email], input[name=loginfmt]",
-  credentialField: 'input#username, input#userName, input[type="password"]',
-  mfaChallenge: "#idRichContext_DisplaySign, #idDiv_SAOTCAS_Title",
+  emailFields: ["input[type=email]", "input[name=loginfmt]"],
+  credentialFields: ['input#username', 'input#userName', 'input[type="password"]'],
+  mfaChallenges: ["#idRichContext_DisplaySign", "#idDiv_SAOTCAS_Title", "#idDiv_SAOTCC_Title"],
   campusSaml: 'a[href*="/d2l/lp/auth/saml/initiate-login"]',
   kmsiCheckbox: "#KmsiCheckboxField",
   kmsiTitle: "Stay signed in?",
@@ -117,6 +118,10 @@ export class BrowserAuth {
       };
       page.on("request", listener);
       await this.navigateAndLogin(page);
+      // Persist the verified browser state before token acquisition. Token
+      // minting can fail independently, and a temporary outage must not throw
+      // away newly renewed Entra or Brightspace cookies.
+      await this.stateStore.save(await context.storageState());
       const material = await this.harvestSessionMaterial(page, context);
       let token: TokenData | null = null;
       if (material.cookieHeader && material.csrfToken) {
@@ -135,7 +140,6 @@ export class BrowserAuth {
       }
       if (!token) throw new BrowserAuthError("Brightspace did not provide a usable API token. Saved SSO cookies have been preserved.", "token_extraction");
       if (interrupted) throw new BrowserAuthError("Authentication interrupted", "interrupted");
-      await this.stateStore.save(await context.storageState());
       log("INFO", "Headless authentication complete");
       return { ...token, ...material, tenantOrigin: new URL(this.config.baseUrl).origin };
     } finally {
@@ -242,25 +246,38 @@ export class BrowserAuth {
 
   /** Restore first, and only attempt credentials after a real sign-in is needed. */
   private async navigateAndLogin(page: Page): Promise<boolean> {
+    let navigationError: unknown;
+    let response;
     try {
-      const response = await page.goto(`${this.config.baseUrl}/d2l/home`, {
+      response = await page.goto(`${this.config.baseUrl}/d2l/home`, {
         waitUntil: "domcontentloaded",
-        timeout: 30000,
+        timeout: INITIAL_NAVIGATION_TIMEOUT_MS,
       });
-      if (response && (response.status() >= 500 || response.status() === 429)) {
-        throw new BrowserAuthTransportError(`Brightspace temporarily returned HTTP ${response.status()}. Saved state is preserved.`);
-      }
     } catch (error) {
-      if (error instanceof BrowserAuthTransportError) throw error;
-      throw new BrowserAuthTransportError("Could not reach Brightspace. Retry when the connection is available.", { cause: error });
+      // Brightspace Bar tolerates a navigation timeout because SAML may keep
+      // redirecting after Playwright stops waiting. Continue with the same
+      // bounded page-state poll, but never infer that credentials are needed
+      // from the navigation failure itself.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/timeout|ERR_ABORTED|navigation.*interrupted/i.test(message)) {
+        throw new BrowserAuthTransportError("Could not reach Brightspace. Retry when the connection is available.", { cause: error });
+      }
+      navigationError = error;
+      log("WARN", "Initial Brightspace navigation did not settle; checking the current SSO page");
+    }
+    if (response && (response.status() >= 500 || response.status() === 429)) {
+      throw new BrowserAuthTransportError(`Brightspace temporarily returned HTTP ${response.status()}. Saved state is preserved.`);
     }
     if (await this.awaitSilentSSO(page)) {
       log("INFO", "Saved session is active");
       return true;
     }
-    const pendingMfa = await this.isOnScreen(page, SILENT_SSO.mfaChallenge);
+    const pendingMfa = await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges);
     if (!pendingMfa && !await this.hasCredentialPrompt(page)) {
-      throw new BrowserAuthTransportError("The sign-in page has not settled on a supported login challenge. Retry shortly; saved state is preserved.");
+      throw new BrowserAuthTransportError(
+        "The sign-in page has not settled on a supported login challenge. Retry shortly; saved state is preserved.",
+        navigationError === undefined ? undefined : { cause: navigationError }
+      );
     }
     if (!this.ssoFlow.hasCredentials() && !pendingMfa) {
       throw new UnsupportedAuthenticationError("Headless sign-in requires saved credentials. Run brightspace-mcp-server setup.");
@@ -292,7 +309,7 @@ export class BrowserAuth {
 
       // Only a visible supported challenge justifies entering credentials or
       // waiting for MFA. A stalled redirect is not proof of session expiry.
-      if (await this.isOnScreen(page, SILENT_SSO.emailField)) {
+      if (await this.isAnyOnScreen(page, SILENT_SSO.emailFields)) {
         if (!accountHintAttempted && this.ssoFlow.identifyAccount) {
           accountHintAttempted = true;
           if (await this.ssoFlow.identifyAccount(page)) {
@@ -304,11 +321,11 @@ export class BrowserAuth {
         log("INFO", "The identity provider requires an account login");
         return false;
       }
-      if (await this.isOnScreen(page, SILENT_SSO.mfaChallenge)) {
+      if (await this.isAnyOnScreen(page, SILENT_SSO.mfaChallenges)) {
         log("INFO", "The identity provider requires a login challenge");
         return false;
       }
-      if (await this.isOnScreen(page, SILENT_SSO.credentialField)) {
+      if (await this.isAnyOnScreen(page, SILENT_SSO.credentialFields)) {
         passwordPromptPolls += 1;
         // Entra can briefly expose a password-shaped control while its email
         // view initializes. Brightspace Bar polls the evolving page instead of
@@ -335,7 +352,8 @@ export class BrowserAuth {
   }
 
   private async hasCredentialPrompt(page: Page): Promise<boolean> {
-    return await this.isOnScreen(page, SILENT_SSO.emailField) || await this.isOnScreen(page, SILENT_SSO.credentialField);
+    return await this.isAnyOnScreen(page, SILENT_SSO.emailFields) ||
+      await this.isAnyOnScreen(page, SILENT_SSO.credentialFields);
   }
 
   /**
@@ -419,6 +437,14 @@ export class BrowserAuth {
     } catch (error) {
       throw new BrowserAuthTransportError("The browser could not inspect the sign-in page. Saved state is preserved.", { cause: error });
     }
+  }
+
+  /** Check each selector independently so a hidden earlier match cannot mask a visible one. */
+  private async isAnyOnScreen(page: Page, selectors: readonly string[]): Promise<boolean> {
+    for (const selector of selectors) {
+      if (await this.isOnScreen(page, selector)) return true;
+    }
+    return false;
   }
 
   /**

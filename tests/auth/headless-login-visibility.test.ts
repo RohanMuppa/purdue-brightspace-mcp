@@ -95,10 +95,10 @@ describe("headless BrowserAuth lifecycle", () => {
     expect(browser.close).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves saved cookies when token extraction fails", async () => {
+  it("persists renewed browser state before token extraction can fail", async () => {
     (auth as any).tryExtractToken.mockResolvedValue(null);
     await expect(auth.authenticate()).rejects.toThrow("Saved SSO cookies have been preserved");
-    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.save).toHaveBeenCalledWith({ cookies: [], origins: [] });
     expect((auth as any).navigateAndLogin).toHaveBeenCalledOnce();
   });
 });
@@ -107,7 +107,7 @@ describe("headless credential login and cooldown", () => {
   beforeEach(() => {
     (auth as any).navigateAndLogin.mockRestore();
     page.goto = vi.fn(async () => null);
-    page.locator = vi.fn((selector: string) => ({ first: () => ({ isVisible: async () => selector === "input[type=email], input[name=loginfmt]" }) }));
+    page.locator = vi.fn((selector: string) => ({ first: () => ({ isVisible: async () => selector === "input[type=email]" }) }));
     (auth as any).ssoFlow = { hasCredentials: () => true, login: vi.fn(async () => true) };
     vi.spyOn(auth as any, "awaitSilentSSO").mockResolvedValue(false);
     vi.spyOn(auth as any, "hasLiveSession").mockResolvedValue(true);

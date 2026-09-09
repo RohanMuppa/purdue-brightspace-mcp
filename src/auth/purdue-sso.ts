@@ -85,9 +85,12 @@ export class PurdueSSOFlow {
       await this.handleCampusSelector(page);
 
       // Restored Microsoft state can lead directly to MFA or stay-signed-in.
-      const postCredential = await page.locator(
-        `${NUMBER_MATCH_SELECTOR}, #idDiv_SAOTCAS_Title, #idDiv_SAOTCC_Title, #KmsiCheckboxField`
-      ).first().isVisible().catch(() => false);
+      const postCredential = await this.anyVisible(page, [
+        NUMBER_MATCH_SELECTOR,
+        "#idDiv_SAOTCAS_Title",
+        "#idDiv_SAOTCC_Title",
+        "#KmsiCheckboxField",
+      ]);
       const kmsi = await page.getByText("Stay signed in?").first().isVisible().catch(() => false);
       if (!page.url().includes("/d2l/home") && !postCredential && !kmsi) await this.enterCredentials(page);
 
@@ -170,6 +173,14 @@ export class PurdueSSOFlow {
   private async clickWhenReady(page: Page, selectors: string[]): Promise<boolean> {
     // Entra often detaches the button after the click has already navigated.
     return this.actWhenReady(page, selectors, target => target.click().catch(() => {}));
+  }
+
+  /** Match Brightspace Bar's selector loop instead of trusting the first DOM match. */
+  private async anyVisible(page: Page, selectors: readonly string[]): Promise<boolean> {
+    for (const selector of selectors) {
+      if (await page.locator(selector).first().isVisible().catch(() => false)) return true;
+    }
+    return false;
   }
 
   /** Brightspace Bar's bounded number/auth/KMSI polling loop. */
