@@ -83,18 +83,6 @@ npx brightspace-mcp-server auth
 
 **MFA at Purdue** is Microsoft Authenticator number matching: enter the terminal-displayed number on your phone. The MCP also sends authentication progress as logging notifications to clients that display them. Some desktop clients hide server logs, so use the terminal command above if the number is not visible. Unsupported identity-provider pages require a supported sign-in handler; the server does not silently open a visible browser.
 
-## Upgrading to 2.0.0
-
-- Restart existing MCP processes after upgrading. v1 and v2 should not authenticate simultaneously against the same session directory.
-- Named accounts use separate directories below `~/.d2l-session/accounts/`, keyed by school and username. The first v2 login for a named account may require MFA because v1 browser state does not prove which username it belongs to. Switching accounts never replays another account's cookies.
-- On first use, the server moves a v1 config password into the native credential store, verifies it, then removes it from `config.json`. Tokens and browser storage migrate to authenticated encryption using a new random key in that store.
-- A locked or unavailable credential store stops migration and preserves existing files. Unlock it and retry. macOS may ask you to allow the Node executable to access Keychain.
-- After migration, the old storage snapshot is moved to Trash. After successful browser authentication, the inactive `browser-data` profile is also moved to Trash. Those legacy copies remain recoverable there; existing `.corrupted.*` backups are not automatically removed.
-- The server uses a fresh browser context for each authentication attempt. It saves only encrypted browser storage, with no permanent Chromium profile.
-- Keep `D2L_SESSION_DIR` on this computer's local filesystem. Sharing it through NFS or a network drive is unsupported; its encryption key belongs to this operating-system account.
-- `D2L_HEADLESS` remains recognized for compatibility; v2 authentication always runs headlessly. Environment-supplied passwords remain accepted as input and are saved in native secure storage. Remove old password values from your own `.env` or client configuration after migration.
-- If you change your password, run `setup` again. If the encryption key was deleted, restore the native credential entry or use a new session directory and authenticate. Unreadable saved sessions are preserved rather than silently replaced.
-
 ## What You Can Ask About
 
 | Topic | Examples |
@@ -141,9 +129,9 @@ Licensed under the MIT License.
 
 ## Updates
 
-Automatic. Every time your AI client starts a session, it runs `npx brightspace-mcp-server@latest` which pulls the newest version from npm. No action needed.
+Automatic. Every time your AI client starts a session, it runs commands which pull the newest version from npm. No action needed.
 
-If you ever suspect you're on an old version (the auth banner prints the version), clear the npx cache and restart your client:
+However, mistakes do occur, so regularly, especially if you suspect you're on an old version, clear the npx cache and restart your client:
 
 ```bash
 npx clear-npx-cache
@@ -156,33 +144,5 @@ npx clear-npx-cache
 - Removed the one-hour browser-state cutoff and destructive profile recovery.
 - Process-level authentication coordination, failed-MFA cooldown, and transport errors that preserve your session.
 - Publishing waits for the test matrix on macOS, Windows, and Linux.
-
-Authentication recovery patterns were informed by [Brightspace Bar](https://github.com/DavidChen-006/Brightspace-Bar), distributed under the MIT license.
-
-## What's new in 1.6.1
-
-- Your saved login now survives a network change. The session file was encrypted with a key derived from the machine hostname, which on campus wifi is a DHCP name that changes with the lease. When it changed, the saved session became unreadable and you were sent back through a full MFA login. Upgrading costs one final login, then it stops.
-
-## What's new in 1.6.0
-
-- **Read the files attached to an assignment.** The spec PDF, the starter workbook, the rubric. Ask what an assignment requires and the answer comes from the actual document, not just its one-line description. Handles PDF, Word, Excel, and PowerPoint.
-- The roster no longer hides people: a class larger than the limit now reports the true total and says it was truncated, and the limit can be raised.
-- Fixed a case where a class list or course list could stop short of the last page.
-
-## What's new in 1.5.0
-
-- Token refresh no longer opens a browser: the access token is re-minted from your session cookie in about 200 ms.
-- Silent re-login when your Microsoft session is still alive, and a fast fallback to the credential login when it is not.
-- The Microsoft Authenticator number match is printed in the terminal, so headless logins can be approved.
-- `get_upcoming_due_dates` reads due dates from assignments and quizzes directly. It no longer reports a quiz as due on the day it opens.
-- Every assignment, quiz, and due date carries a `url` that opens the item in Brightspace.
-- Gradebook columns with no matching assignment or quiz (a proctored midterm, for example) are surfaced as `gradeOnly` items.
-- Unpublished announcements are hidden, and announcements sort by the date they were scheduled to post.
-- A dead session is detected even when Brightspace answers with HTTP 200, so re-login triggers instead of a confusing network error.
-- SUNY preset (`--suny`) and a more robust Microsoft Entra login, contributed by the community.
-
----
-
-Proudly made for Boilermakers by [Rohan Muppa](https://github.com/rohanmuppa) 🚂
-
+  
 [Report a bug](https://github.com/rohanmuppa/brightspace-mcp-server/issues) · MIT · Copyright 2026 Rohan Muppa
